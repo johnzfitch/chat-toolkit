@@ -1,18 +1,17 @@
 {
   "manifest_version": 2,
   "name": "Chat Toolkit",
-  "version": "1.6.7",
+  "version": "1.7.0",
   "description": "Export AI conversations to JSON, Markdown, or HTML, with supplied reasoning, sources, tool results, and optional diagnostics.",
   "author": "Zack Fitch <zack@definitelynot.ai>",
 
   "permissions": [
-    "activeTab",
     "clipboardWrite",
     "downloads",
+    "storage",
     "webRequest",
     "webRequestBlocking",
     "https://claude.ai/*",
-    "https://api.anthropic.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://gemini.google.com/*",
@@ -33,7 +32,7 @@
 
   "background": {
     "scripts": ["lib/background.js"],
-    "persistent": false
+    "persistent": true
   },
 
   "content_scripts": [
@@ -49,6 +48,7 @@
       ],
       "js": [
         "lib/common.js",
+        "lib/ui-model.js",
         "lib/dom-helpers.js",
         "lib/api-fetchers.js",
         "lib/parser-worker.js",
@@ -63,10 +63,15 @@
 
   "browser_action": {
     "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png"
+      "16": "icons/chat-toolkit-16.png",
+      "32": "icons/chat-toolkit-32.png",
+      "64": "icons/chat-toolkit-64.png"
     },
+    "theme_icons": [
+      { "size": 16, "light": "icons/toolbar/ink-light-16.png", "dark": "icons/toolbar/ink-dark-16.png" },
+      { "size": 32, "light": "icons/toolbar/ink-light-32.png", "dark": "icons/toolbar/ink-dark-32.png" },
+      { "size": 64, "light": "icons/toolbar/ink-light-64.png", "dark": "icons/toolbar/ink-dark-64.png" }
+    ],
     "default_title": "Chat Toolkit",
     "default_popup": "popup/popup.html"
   },
@@ -77,14 +82,11 @@
   },
 
   "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "96": "icons/icon96.png",
-    "128": "icons/icon128.png"
-  },
-
-  "web_accessible_resources": [
-    "lib/parser-worker.js"
-  ]
+    "16": "icons/chat-toolkit-16.png",
+    "32": "icons/chat-toolkit-32.png",
+    "48": "icons/chat-toolkit-48.png",
+    "64": "icons/chat-toolkit-64.png",
+    "96": "icons/chat-toolkit-96.png",
+    "128": "icons/chat-toolkit-128.png"
+  }
 }

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat Toolkit listing harness (synthetic)</title>
+<!--
+  Development-only harness for AMO listing screenshots. It renders the real
+  panel and popup code from extension-src/ over a neutral, synthetic chat
+  page. It imitates no provider's interface and contains no real
+  conversation. Not packaged in the extension.
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: grid; grid-template-columns: 240px 1fr; background: #0f1115;
+    color: #d9dde4; font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body.light { color-scheme: light; background: #f6f7f9; color: #1d2229; }
+  aside { border-right: 1px solid rgba(255,255,255,.08); padding: 18px 14px; }
+  body.light aside { border-color: rgba(0,0,0,.1); }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #8a93a3; margin: 0 0 12px; }
+  aside a { display: block; padding: 7px 10px; border-radius: 8px; color: inherit; text-decoration: none; font-size: 14px; }
+  aside a.on { background: rgba(127,127,127,.16); }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  header { padding: 14px 28px; border-bottom: 1px solid rgba(255,255,255,.08); font-weight: 600; }
+  body.light header { border-color: rgba(0,0,0,.1); }
+  .thread { flex: 1; overflow: auto; padding: 24px 28px 24px 360px; }
+  body.dock-right .thread { padding: 24px 360px 24px 28px; }
+  .msg { max-width: 640px; margin: 0 0 18px; }
+  .who { font-size: 12px; font-weight: 600; color: #8a93a3; margin-bottom: 4px; }
+  .user .bubble { background: rgba(127,127,127,.14); border-radius: 12px; padding: 10px 14px; display: inline-block; }
+  pre { background: rgba(127,127,127,.12); border-radius: 8px; padding: 10px 12px; font-size: 13px; overflow: auto; }
+  .composer { margin: 0 28px 20px 360px; border: 1px solid rgba(127,127,127,.3); border-radius: 14px; padding: 12px 16px; color: #8a93a3; }
+  body.dock-right .composer { margin: 0 360px 20px 28px; }
+  .demo { position: fixed; right: 12px; bottom: 8px; font-size: 11px; color: #8a93a3; }
+  #popup { position: fixed; top: 16px; right: 16px; width: 300px; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 12px 32px rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.12); display: none; }
+</style>
+</head>
+<body>
+<aside>
+  <h2>Conversations</h2>
+  <a class="on" href="#">Lisbon weekend plan</a>
+  <a href="#">Sourdough hydration</a>
+  <a href="#">Python retry decorator</a>
+  <a href="#">Garden watering schedule</a>
+</aside>
+<main>
+  <header>Lisbon weekend plan</header>
+  <div class="thread">
+    <div class="msg user"><div class="who">You</div><div class="bubble">Plan three relaxed days in Lisbon for someone who likes tiles, bakeries, and short walks.</div></div>
+    <div class="msg"><div class="who">Assistant</div>
+      <p><strong>Day 1 · Alfama and Graça.</strong> Start at the Miradouro de Santa Luzia, wander downhill through Alfama, and finish with a pastry near the cathedral.</p>
+      <p><strong>Day 2 · Tiles.</strong> Visit the National Tile Museum in the morning, then take the tram back toward Baixa for a slow lunch.</p>
+      <p><strong>Day 3 · Belém.</strong> Walk the riverside, see the monastery cloister, and try the famous custard tarts.</p>
+    </div>
+    <div class="msg user"><div class="who">You</div><div class="bubble">Can you turn that into a packing checklist?</div></div>
+    <div class="msg"><div class="who">Assistant</div>
+<pre>- Comfortable walking shoes (hills + cobblestones)
+- Light jacket for evening wind by the river
+- Reusable water bottle
+- Transit card for trams and the ferry</pre>
+    </div>
+  </div>
+  <div class="composer">Message the assistant…</div>
+</main>
+<div class="demo">Synthetic demonstration page</div>
+<iframe id="popup" title="Toolbar popup preview"></iframe>
+<script src="harness.js"></script>
+</body>
+</html>

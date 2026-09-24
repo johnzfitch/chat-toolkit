@@ -1,37 +1,62 @@
-// Off-main-thread parser. Receives platform + raw payload, returns
-// normalized data, clean JSON, and rendered Markdown/HTML/LLM output.
+// Conversation parser. Receives platform + raw payload, returns normalized
+// data, clean JSON, and rendered Markdown/HTML/LLM output.
 //
-// Keeping this work off the main thread lets long chats (many thinking
-// blocks, big tool results, lots of latex) parse and render without
-// blocking the chat site's UI. Cross-thread cost is one structuredClone
-// of the raw payload per request — cheap compared to the regex + JSON
-// pass it would otherwise force on the main thread.
+// Loaded as a content script and called through CT.parserCall. (The file
+// name predates the removal of an unused Worker entry point; Firefox cannot
+// start a Worker from a content script with an extension URL.)
 
 'use strict';
 
 const ARTIFACT_TOOLS = ['artifacts', 'create_artifact', 'rewrite_artifact', 'update_artifact', 'create_file', 'file_create'];
 const PLACEHOLDER = /^[\s\n]*```[\s\n]*This block is not supported/;
 
+// A CommonMark code fence: up to three spaces, then three or more backticks
+// or tildes. The closing fence must use the same character and be at least
+// as long as the opening fence.
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
 const Clean = {
-    emoji: (t) => t.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}]/gu, ''),
     unsupported: (t) => t.replace(/```\s*\n\s*This block is not supported[^\n]*\n\s*```\s*\n?/g, ''),
-    isArt: (line) => /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬┃┏┓┗┛┣┫┳┻╋▀▄█▌▐░▒▓]/.test(line),
+    // Exports are archival: emoji and other symbols are conversation content.
+    // Only trailing spaces and runs of blank lines in prose are normalized;
+    // lines inside fenced code blocks are kept exactly as supplied.
     whitespace: (t) => {
         const lines = t.split('\n');
         const result = [];
         let blanks = 0;
+        let fence = null;
         for (const line of lines) {
+            const marker = line.match(FENCE)?.[1] || '';
+            if (fence) {
+                result.push(line);
+                if (marker && marker[0] === fence[0] && marker.length >= fence.length &&
+                    !line.trim().slice(marker.length).trim()) fence = null;
+                continue;
+            }
+            if (marker && !(marker[0] === '`' && line.trim().slice(marker.length).includes('`'))) {
+                fence = marker;
+                blanks = 0;
+                result.push(line.trimEnd());
+                continue;
+            }
             const trimmed = line.trimEnd();
             if (!trimmed) {
                 if (++blanks <= 1) result.push('');
             } else {
                 blanks = 0;
-                result.push(Clean.isArt(line) || line.startsWith('    ') ? line.trimEnd() : trimmed);
+                result.push(trimmed);
             }
         }
         return result.join('\n');
     },
-    process: (t) => Clean.whitespace(Clean.emoji(Clean.unsupported(t || ''))).trim()
+    process: (t) => Clean.whitespace(Clean.unsupported(t || '')).trim()
+};
+
+// Choose a fence longer than any backtick run inside the content, so code
+// that itself contains ``` cannot terminate the exported block early.
+const fenceFor = (content) => {
+    const longest = Math.max(0, ...(String(content || '').match(/`+/g) || []).map((run) => run.length));
+    return '`'.repeat(Math.max(3, longest + 1));
 };
 
 const escapeHTML = (text) => (text || '')
@@ -59,6 +84,13 @@ const compactObject = (obj) => Object.fromEntries(Object.entries(obj).filter(([,
     if (typeof value === 'string') return value.trim().length > 0;
     return true;
 }));
+
+// Short tool inputs such as {"query": "…"} stay on one line; longer ones are
+// indented for reading.
+const compactToolInput = (input) => {
+    const line = JSON.stringify(input);
+    return line.length <= 160 ? line : JSON.stringify(input, null, 2);
+};
 
 const Extract = {
     text: (content) => {
@@ -133,7 +165,7 @@ const Extract = {
         const content = typeof inp.command === 'string' ? inp.command
             : typeof inp.code === 'string' ? inp.code
             : typeof inp.content === 'string' ? inp.content
-            : Object.keys(inp).length ? JSON.stringify(inp, null, 2)
+            : Object.keys(inp).length ? compactToolInput(inp)
             : '';
         if (!content) return null;
 
@@ -861,7 +893,9 @@ const hasUsableMessages = (data) => getMessages(data).some((message) =>
 const renderMarkdownBlock = (block) => {
     const lines = [];
     if (block.title) lines.push(`### ${block.title}\n`);
-    lines.push('```' + (block.language || '') + '\n' + (block.content || '').replace(/\n+$/, '') + '\n```\n');
+    const content = (block.content || '').replace(/\n+$/, '');
+    const fence = fenceFor(content);
+    lines.push(fence + (block.language || '') + '\n' + content + '\n' + fence + '\n');
     return lines.join('');
 };
 
@@ -1116,6 +1150,10 @@ const DIRECT_REFERENCE_TYPE = /^(?:citation|web_search_result_location|search_re
 // Claude puts source data inside content blocks rather than ChatGPT-style
 // message metadata. Walk only source-bearing subtrees and retain the public
 // URL/title pair while deliberately ignoring encrypted result payloads.
+// Search results carry site icons next to their links. Icons are not sources.
+const IMAGE_FIELD = /^(?:favicon|favicon_url|favicons|icon|icon_url|logo|logo_url|image|image_url|thumbnail|thumbnail_url)$/i;
+const FAVICON_URL = /\/s2\/favicons\b|\/favicon(?:\.ico|s?\b)/i;
+
 const collectStructuredReferences = (roots) => {
     const references = [];
     const seen = new WeakSet();
@@ -1130,7 +1168,7 @@ const collectStructuredReferences = (roots) => {
                 visit(parsed, true, depth + 1);
                 return;
             }
-            if (sourceContext && referenceURL(value)) {
+            if (sourceContext && referenceURL(value) && !FAVICON_URL.test(value)) {
                 references.push(compactReference({ type: 'source', url: value }));
             }
             return;
@@ -1157,7 +1195,7 @@ const collectStructuredReferences = (roots) => {
         }
 
         for (const [key, child] of Object.entries(value)) {
-            if (key === 'encrypted_content' || key === 'cited_text') continue;
+            if (key === 'encrypted_content' || key === 'cited_text' || IMAGE_FIELD.test(key)) continue;
             const childContext = relevantObject || REFERENCE_CONTAINER.test(key);
             visit(child, childContext, depth + 1);
         }
@@ -1219,7 +1257,10 @@ const collectSearchQueries = (data) => {
     return queries;
 };
 
-const compactResources = (raw) => compactObject({
+// Zero counts are omitted: an absent count means zero.
+const nonZero = (obj) => Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== 0));
+
+const compactResources = (raw) => compactObject(nonZero({
     safe_url_count: Array.isArray(raw?.safe_urls) ? raw.safe_urls.length : 0,
     safe_urls: Array.isArray(raw?.safe_urls) ? raw.safe_urls.map((url) => String(url)) : [],
     blocked_url_count: Array.isArray(raw?.blocked_urls) ? raw.blocked_urls.length : 0,
@@ -1235,7 +1276,7 @@ const compactResources = (raw) => compactObject({
         : Array.isArray(raw?.config?.sources) ? raw.config.sources.length
         : Array.isArray(raw?.code_session?.config?.sources) ? raw.code_session.config.sources.length
             : 0
-});
+}));
 
 const compactToolName = (value) => String(value || '').trim();
 
@@ -1307,32 +1348,34 @@ const collectToolActivity = (platform, data) => {
     });
 };
 
-// This is an archival chat-history tool: exports are full fidelity. Reasoning,
-// tool calls and tool results are part of the history, so they are labelled by
-// channel rather than dropped, and no character budget is applied. The limits
-// below stay as named constants so a bounded mode can be reintroduced by
-// changing a number instead of restoring filter logic.
+// Exports keep every message on the active branch, with reasoning and tool
+// traffic labelled by channel rather than dropped.
 const LLM_ALLOWED_ROLES = new Set(['user', 'assistant', 'system', 'tool']);
 const REASONING_CONTENT_TYPES = new Set(['thoughts', 'reasoning_recap']);
-const MAX_LLM_TOTAL_CHARS = Infinity;
-const MAX_LLM_MESSAGE_CHARS = Infinity;
-const MAX_LLM_SYSTEM_CHARS = Infinity;
-const MAX_LLM_ATTACHMENTS = Infinity;
-const MAX_LLM_REFERENCES = Infinity;
 
-const clipText = (value, maxChars) => {
-    const text = Clean.process(String(value || ''));
-    const limit = Number(maxChars);
-    // A non-finite budget means "keep everything" — the archival default.
-    if (!Number.isFinite(limit)) return { text, truncated: false };
-    if (text.length <= limit) return { text, truncated: false };
-    const suffix = '\n[… truncated …]';
-    if (limit <= suffix.length) return { text: suffix.slice(0, limit), truncated: true };
-    return {
-        text: `${text.slice(0, limit - suffix.length).trimEnd()}${suffix}`,
-        truncated: true
+// Exports keep all content and remove repetition only: a long tool output
+// identical to an earlier one becomes a one-line reference.
+const MIN_REPEATED_OUTPUT_CHARS = 200;
+
+const createDedupeFilter = () => {
+    const seen = new Set();
+    let repeated = 0;
+    const apply = (kind, value) => {
+        const text = String(value || '');
+        if (kind !== 'tool_result' || text.length < MIN_REPEATED_OUTPUT_CHARS) return text;
+        if (seen.has(text)) {
+            repeated += 1;
+            return '[Same output as an earlier tool result.]';
+        }
+        seen.add(text);
+        return text;
     };
+    return { apply, get repeated() { return repeated; } };
 };
+
+// A source whose link already appears in the exported conversation is not
+// listed again.
+const notInBody = (body) => (item) => !item.url || !body.includes(item.url);
 
 // Every message on the active branch is history. Branch selection still happens
 // in orderedMappingMessages, which follows current_node so abandoned
@@ -1376,10 +1419,9 @@ const selectConversationEntries = (data) => {
             hidden: !!message?.metadata?.is_visually_hidden_from_conversation
         });
     }
-    // Consecutive assistant rows used to be collapsed to the last one, which
-    // silently discarded earlier answers once tool/reasoning separators were
-    // filtered out ahead of the check. History keeps every row.
-    return { entries, collapsedAssistant: 0 };
+    // Consecutive assistant rows are all kept; collapsing them to the last
+    // one once silently discarded earlier answers.
+    return { entries };
 };
 
 const compactToolSummary = (tools) => tools ? compactObject({
@@ -1391,15 +1433,40 @@ const compactToolSummary = (tools) => tools ? compactObject({
     items: tools.items || []
 }) : null;
 
+const hostnameOf = (url) => {
+    try { return new URL(url).hostname.replace(/^www\./, ''); }
+    catch { return ''; }
+};
+
+// Attribution equal to the link's own domain is derivable from the URL and
+// omitted; entries with no title, link, or id carry nothing and are dropped.
 const compactLLMReference = (item) => compactObject({
     type: item.type === 'source' ? '' : item.type || '',
     title: item.title || '',
     url: item.url || '',
-    attribution: item.attribution || '',
+    attribution: item.attribution && item.attribution.replace(/^www\./, '') !== hostnameOf(item.url) ? item.attribution : '',
     id: item.id || ''
 });
+const usefulReference = (item) => !!(item.title || item.url || item.id);
 
-const toLLMJSON = (platform, raw, clean, fallbackTitle, fallbackId) => {
+// Scoped exports (`role` = 'user' or 'assistant') keep only that role's turns.
+// They omit the conversation-wide appendix, as the Markdown role export does,
+// so a user-only file does not carry the assistant's sources or tool activity.
+const exportScope = (role) => (role === 'user' || role === 'assistant') ? role : '';
+
+// Raw Grok response fields whose content is already exported through a
+// normalized field (id, created_at, content, thinking, blocks, sources,
+// search_queries, attachments).
+const GROK_DUPLICATE_FIELDS = new Set(['responseId', 'createTime', 'thinking_source', 'thinking', 'steps',
+    'webSearchResults', 'citedWebSearchResults', 'xposts', 'citedXposts', 'ragResults', 'citedRagResults',
+    'connectorSearchResults', 'citedConnectorSearchResults', 'collectionSearchResults',
+    'citedCollectionSearchResults', 'searchProductResults', 'toolResponses', 'fileAttachments',
+    'fileAttachmentsMetadata', 'fileAttachmentAssetMetadata', 'imageAttachments', 'generatedImageUrls',
+    'fileUris', 'fileIds']);
+
+const toLLMJSON = (platform, raw, clean, fallbackTitle, fallbackId, role = '') => {
+    const scope = exportScope(role);
+    const filter = createDedupeFilter();
     const sourceMessages = getMessages(raw);
     const mappingMessageCount = raw?.mapping
         ? Object.values(raw.mapping).filter((node) => node?.message).length
@@ -1408,9 +1475,7 @@ const toLLMJSON = (platform, raw, clean, fallbackTitle, fallbackId) => {
     const omittedByRole = {};
     const byChannel = {};
     let omittedEmpty = 0;
-    let omittedForBudget = 0;
-    let truncatedMessages = 0;
-    let remainingChars = MAX_LLM_TOTAL_CHARS;
+    let omittedForScope = 0;
 
     for (const message of sourceMessages) {
         const role = getRole(message);
@@ -1421,72 +1486,88 @@ const toLLMJSON = (platform, raw, clean, fallbackTitle, fallbackId) => {
 
     const selected = selectConversationEntries(raw);
     for (const { index, message, role, channel, hidden } of selected.entries) {
+        if (scope && role !== scope) {
+            omittedForScope += 1;
+            continue;
+        }
         const text = Clean.process(getText(message));
         const normalizedBlocks = plainBlocksForMessage(platform, message, index);
-        const normalizedContent = normalizedBlocks.map((block) =>
-            block.kind === 'text' || block.kind === 'thinking' ? block.text : block.content
-        ).filter(Boolean).join('\n\n');
-        const geminiThinking = /^(?:gemini|google)$/.test(platform) ? normalizedBlocks
-            .filter((block) => block.kind === 'thinking')
-            .map((block) => block.text).filter(Boolean).join('\n\n') : '';
-        const openRouterOutput = platform === 'openrouter' ? normalizedBlocks
-            .filter((block) => block.kind === 'text')
-            .map((block) => block.text).filter(Boolean).join('\n\n') : '';
-        const openRouterReasoning = platform === 'openrouter' ? normalizedBlocks
-            .filter((block) => block.kind === 'thinking')
-            .map((block) => block.text).filter(Boolean).join('\n\n') : '';
-        const openRouterToolContent = platform === 'openrouter' ? normalizedBlocks
-            .filter((block) => block.kind !== 'text' && block.kind !== 'thinking')
-            .map((block) => block.content).filter(Boolean).join('\n\n') : '';
+        const textOf = (kind) => normalizedBlocks.filter((block) => block.kind === kind)
+            .map((block) => block.text).filter(Boolean).join('\n\n');
+        const blockText = textOf('text');
+        const reasoningText = platform === 'grok' ? Clean.process(message.thinking) : textOf('thinking');
         // Only rows with no content of their own (web.run search hits) fall back
         // to metadata; see Normalize.chatgptMessage for why this is not applied
         // to the final answer.
         const searchBlocks = !text && platform === 'chatgpt' ? Normalize.searchResultBlocks(message) : [];
-        const combined = platform === 'openrouter'
-            ? [openRouterReasoning, openRouterOutput, openRouterToolContent].filter(Boolean).join('\n\n')
-            : text || searchBlocks.map((block) => block.content).join('\n\n') || normalizedContent;
-        if (!combined && !(platform === 'grok' && (message.sources?.length || message.steps?.length))) {
+        const baseContent = platform === 'openrouter' ? blockText
+            : text || searchBlocks.map((block) => block.content).join('\n\n') || blockText;
+        let content = baseContent;
+        // ChatGPT reasoning rows hold the reasoning as their text; keep it once.
+        const thinking = reasoningText && reasoningText !== baseContent ? reasoningText : '';
+        // ChatGPT stores each tool call/result as its own row; its text is the
+        // tool traffic, so repeated tool output is checked here too.
+        if (channel === 'tool_result' || channel === 'tool_call') content = filter.apply(channel, content);
+        // Non-text blocks (tool calls, tool results, artifacts, attachments)
+        // carry what the text omits. Text and reasoning are already exported
+        // as content and thinking, and a block equal to the content is not
+        // repeated.
+        const blocks = normalizedBlocks
+            .filter((block) => block.kind !== 'text' && block.kind !== 'thinking')
+            // Grok attachments are exported once, as the attachments field.
+            .filter((block) => !(platform === 'grok' && block.kind === 'attachment'))
+            .filter((block) => Clean.process(block.content) !== baseContent)
+            .map((block) => compactObject({
+                kind: block.kind,
+                id: block.id || '',
+                tool: block.tool || '',
+                title: block.title || '',
+                language: block.language || '',
+                content: filter.apply(block.kind, Clean.process(block.content))
+            }));
+        const hasGrokData = platform === 'grok' && (message.sources?.length || message.steps?.length);
+        if (!content && !thinking && !blocks.length && !hasGrokData) {
             omittedEmpty += 1;
             continue;
         }
-        if (remainingChars <= 0) {
-            omittedForBudget += 1;
-            continue;
-        }
-
-        const perMessageLimit = role === 'system' ? MAX_LLM_SYSTEM_CHARS : MAX_LLM_MESSAGE_CHARS;
-        const clipped = clipText(combined, Math.min(perMessageLimit, remainingChars));
-        if (clipped.truncated) truncatedMessages += 1;
-        remainingChars -= Math.min(clipped.text.length, remainingChars);
-        const exportedChannel = platform === 'openrouter' && openRouterReasoning
-            ? (openRouterOutput ? 'reasoning_and_final' : 'reasoning')
+        const exportedChannel = platform === 'openrouter' && thinking
+            ? (content ? 'reasoning_and_final' : 'reasoning')
             : channel;
         byChannel[exportedChannel] = (byChannel[exportedChannel] || 0) + 1;
+        const grokDetails = platform !== 'grok' ? {}
+            : Object.fromEntries(Object.entries(grokMessageDetails(message))
+                .filter(([key]) => !GROK_DUPLICATE_FIELDS.has(key)));
         messages.push(compactObject({
-            ...(platform === 'grok' ? grokMessageDetails(message) : {}),
+            ...grokDetails,
             source_index: index,
             role,
-            channel: exportedChannel,
+            // Absent channel means "final" (an ordinary message).
+            channel: exportedChannel === 'final' ? '' : exportedChannel,
             name: message?.author?.name || message?.name || '',
             model: message?.model || message?.metadata?.variantSlug || '',
             recipient: message?.recipient && message.recipient !== 'all' ? message.recipient : '',
             content_type: message?.content?.content_type || '',
             hidden_in_ui: hidden || undefined,
-            content: platform === 'openrouter' ? openRouterOutput : platform === 'grok' ? text : clipped.text,
-            thinking: platform === 'grok' ? Clean.process(message.thinking) : geminiThinking,
-            reasoning: platform === 'openrouter' ? openRouterReasoning : '',
-            blocks: platform === 'openrouter' || platform === 'grok' ? normalizedBlocks : [],
-            truncated: clipped.truncated || undefined
+            content,
+            // OpenRouter exports have always named reasoning "reasoning".
+            [platform === 'openrouter' ? 'reasoning' : 'thinking']: thinking,
+            blocks
         }));
     }
 
-    const appendix = gatherExportAppendix(platform, raw);
+    const appendix = scope ? {} : gatherExportAppendix(platform, raw);
     const attachments = appendix.attachments || [];
-    const references = (appendix.references || []).map(compactLLMReference);
+    const body = JSON.stringify(messages);
+    const references = (appendix.references || []).map(compactLLMReference).filter(usefulReference)
+        .filter(notInBody(body));
+    const tools = compactToolSummary(appendix.tools);
+    // The per-item tool index repeats the blocks above; keep the totals.
+    if (tools) delete tools.items;
 
     return compactObject({
-        export_version: 4,
-        export_kind: 'full_conversation_history',
+        export_version: 5,
+        export_kind: scope ? `${scope}_turns` : 'full_conversation_history',
+        scope: scope || undefined,
         platform,
         exported_at: new Date().toISOString(),
         source: raw?._source || 'api',
@@ -1500,33 +1581,26 @@ const toLLMJSON = (platform, raw, clean, fallbackTitle, fallbackId) => {
         model: clean?.model || raw?.model || raw?.default_model_slug || '',
         created_at: clean?.created_at || raw?.created_at || raw?.create_time || null,
         updated_at: clean?.updated_at || raw?.updated_at || raw?.update_time || null,
-        context: compactObject({
+        context: scope ? undefined : compactObject({
             resources: compactResources(raw),
-            tools: compactToolSummary(appendix.tools),
+            tools: tools && tools.total ? tools : undefined,
             attachments,
             search_queries: appendix.search_queries || [],
             references
         }),
-        limits: {
-            // Archival export: no character budget is applied at any level.
-            total_content_chars: 'unlimited',
-            per_message_chars: 'unlimited',
-            max_attachments: 'unlimited',
-            max_references: 'unlimited'
-        },
         source_message_count: sourceMessages.length,
-        mapping_message_count: mappingMessageCount,
+        mapping_message_count: mappingMessageCount !== sourceMessages.length ? mappingMessageCount : undefined,
         message_count: messages.length,
         // Reasoning, tool calls and tool results are retained and labelled via
         // each message's `channel`; this is the tally of what landed where.
         by_channel: byChannel,
-        omitted: compactObject({
+        omitted: compactObject(nonZero({
             by_role: omittedByRole,
             inactive_branch: Math.max(0, mappingMessageCount - sourceMessages.length),
             empty: omittedEmpty,
-            over_budget: omittedForBudget,
-            truncated: truncatedMessages
-        }),
+            other_roles: omittedForScope
+        })),
+        repeated_tool_outputs: filter.repeated || undefined,
         messages
     });
 };
@@ -1537,15 +1611,8 @@ const gatherExportAppendix = (platform, data) => {
     const references = [];
     for (const message of messages) {
         const context = collectMessageContext(message, platform);
-        for (const attachment of context.attachments || []) {
-            if (attachments.length >= MAX_LLM_ATTACHMENTS * 2) break;
-            attachments.push(attachment);
-        }
-        for (const reference of context.references || []) {
-            if (references.length >= MAX_LLM_REFERENCES * 2) break;
-            references.push(reference);
-        }
-        if (attachments.length >= MAX_LLM_ATTACHMENTS * 2 && references.length >= MAX_LLM_REFERENCES * 2) break;
+        attachments.push(...(context.attachments || []));
+        references.push(...(context.references || []));
     }
     references.push(...collectStructuredReferences([
         { citations: data?.citations },
@@ -1553,7 +1620,7 @@ const gatherExportAppendix = (platform, data) => {
         { sources: data?.sources },
         { sources: data?.code_session?.config?.sources }
     ]));
-    const unique = (items, max) => {
+    const unique = (items) => {
         const seen = new Set();
         const result = [];
         for (const item of items) {
@@ -1561,11 +1628,10 @@ const gatherExportAppendix = (platform, data) => {
             if (seen.has(key)) continue;
             seen.add(key);
             result.push(item);
-            if (result.length >= max) break;
         }
         return result;
     };
-    const uniqueReferences = (items, max) => {
+    const uniqueReferences = (items) => {
         const result = [];
         const indexes = new Map();
         for (const item of items) {
@@ -1581,57 +1647,35 @@ const gatherExportAppendix = (platform, data) => {
             }
             indexes.set(key, result.length);
             result.push({ ...item });
-            if (result.length >= max) break;
         }
         return result;
     };
     return compactObject({
         resources: compactResources(data),
         tools: collectToolActivity(platform, data),
-        attachments: unique(attachments, MAX_LLM_ATTACHMENTS * 2),
+        attachments: unique(attachments),
         search_queries: collectSearchQueries(data),
-        references: uniqueReferences(references, MAX_LLM_REFERENCES * 2)
+        references: uniqueReferences(references)
     });
 };
 
-const compactExportMessages = (platform, data, targetRole = '') => {
+const exportMessages = (platform, data, targetRole = '', filter = createDedupeFilter()) => {
     const messages = [];
-    let remainingChars = MAX_LLM_TOTAL_CHARS;
-    let omitted = 0;
-    let truncated = 0;
-
     const selected = selectConversationEntries(data);
     for (const { index, message, role, channel } of selected.entries) {
         if (targetRole && role !== targetRole) continue;
-        if (remainingChars <= 0) {
-            omitted += 1;
-            continue;
-        }
-
         const blocks = [];
-        let messageBudget = Math.min(
-            role === 'system' ? MAX_LLM_SYSTEM_CHARS : MAX_LLM_MESSAGE_CHARS,
-            remainingChars
-        );
         for (const block of plainBlocksForMessage(platform, message, index)) {
             // Every block kind is history: text, reasoning, tool I/O, artifacts.
-            const value = block.kind === 'text' || block.kind === 'thinking' ? block.text : block.content;
-            if (!value || messageBudget <= 0) continue;
-            const clipped = clipText(value, messageBudget);
-            if (!clipped.text) continue;
-            const next = block.kind === 'text' ? { kind: 'text', text: clipped.text }
-                : block.kind === 'thinking' ? { kind: 'thinking', text: clipped.text }
-                : {
-                    kind: block.kind,
-                    tool: block.tool || '',
-                    title: String(block.title || (block.kind === 'artifact' ? 'Artifact' : 'Block')),
-                    language: String(block.language || ''),
-                    content: clipped.text
-                };
-            blocks.push(next);
-            messageBudget -= Math.min(clipped.text.length, messageBudget);
-            remainingChars -= Math.min(clipped.text.length, remainingChars);
-            if (clipped.truncated) truncated += 1;
+            const value = Clean.process(block.kind === 'text' || block.kind === 'thinking' ? block.text : block.content);
+            if (!value) continue;
+            blocks.push(block.kind === 'text' || block.kind === 'thinking' ? { kind: block.kind, text: value } : {
+                kind: block.kind,
+                tool: block.tool || '',
+                title: String(block.title || (block.kind === 'artifact' ? 'Artifact' : 'Block')),
+                language: String(block.language || ''),
+                content: filter.apply(block.kind, value)
+            });
         }
         if (blocks.length) messages.push({
             index,
@@ -1642,23 +1686,31 @@ const compactExportMessages = (platform, data, targetRole = '') => {
             blocks
         });
     }
-    return { messages, omitted, truncated, collapsedAssistant: selected.collapsedAssistant };
+    return messages;
 };
 
-const renderMarkdownAppendix = (platform, data) => {
+// Text of the exported messages, used to avoid listing a source twice.
+const exportedBody = (messages) => messages.flatMap((message) =>
+    message.blocks.map((block) => block.text || block.content || '')).join('\n');
+
+const renderMarkdownAppendix = (platform, data, body = '') => {
     const appendix = gatherExportAppendix(platform, data);
     const lines = [];
+    appendix.references = (appendix.references || []).filter(notInBody(body));
+    if (!appendix.references.length) delete appendix.references;
+    if (!appendix.tools?.total) delete appendix.tools;
     if (!Object.keys(appendix).length) return '';
     lines.push('## Export Context\n');
     if (appendix.resources) {
-        lines.push('```json\n' + JSON.stringify(appendix.resources, null, 2) + '\n```\n');
+        const resources = JSON.stringify(appendix.resources, null, 2);
+        const fence = fenceFor(resources);
+        lines.push(`${fence}json\n${resources}\n${fence}\n`);
     }
-    const attachments = (appendix.attachments || []).slice(0, MAX_LLM_ATTACHMENTS);
+    const attachments = appendix.attachments || [];
     if (attachments.length) {
         lines.push('### Attachments\n');
         attachments.forEach((item) =>
             lines.push(`- ${item.name || item.id || 'attachment'}${item.mime_type ? ` (${item.mime_type})` : ''}`));
-        if (appendix.attachments.length > attachments.length) lines.push(`- … ${appendix.attachments.length - attachments.length} more omitted`);
         lines.push('');
     }
     if (appendix.tools) {
@@ -1673,7 +1725,7 @@ const renderMarkdownAppendix = (platform, data) => {
         searchQueries.forEach((query) => lines.push(`- ${query}`));
         lines.push('');
     }
-    const references = (appendix.references || []).slice(0, MAX_LLM_REFERENCES);
+    const references = (appendix.references || []).filter(usefulReference);
     if (references.length) {
         lines.push('### Sources\n');
         references.forEach((item, index) => {
@@ -1681,18 +1733,20 @@ const renderMarkdownAppendix = (platform, data) => {
                 .replace(/\s+/g, ' ').trim();
             lines.push(`${index + 1}. ${label}${item.url && label !== item.url ? ` - ${item.url}` : ''}`);
         });
-        if (appendix.references.length > references.length) lines.push(`- … ${appendix.references.length - references.length} more omitted`);
         lines.push('');
     }
     return lines.join('\n');
 };
 
-const renderHTMLAppendix = (platform, data) => {
+const renderHTMLAppendix = (platform, data, body = '') => {
     const appendix = gatherExportAppendix(platform, data);
+    appendix.references = (appendix.references || []).filter(notInBody(body));
+    if (!appendix.references.length) delete appendix.references;
+    if (!appendix.tools?.total) delete appendix.tools;
     if (!Object.keys(appendix).length) return '';
     const compactTools = compactToolSummary(appendix.tools);
-    const attachmentsList = (appendix.attachments || []).slice(0, MAX_LLM_ATTACHMENTS);
-    const referencesList = (appendix.references || []).slice(0, MAX_LLM_REFERENCES).map(compactLLMReference);
+    const attachmentsList = appendix.attachments || [];
+    const referencesList = (appendix.references || []).map(compactLLMReference).filter(usefulReference);
     const resources = appendix.resources ? `<details open><summary>Context</summary><pre>${escapeHTML(JSON.stringify(appendix.resources, null, 2))}</pre></details>` : '';
     const tools = compactTools
         ? `<details><summary>Tools (${compactTools.total || 0})</summary><pre>${escapeHTML(JSON.stringify(compactTools, null, 2))}</pre></details>`
@@ -1705,11 +1759,11 @@ const renderHTMLAppendix = (platform, data) => {
         ? `<details><summary>Search Queries (${searchQueries.length})</summary><ul>${searchQueries.map((query) => `<li>${escapeHTML(query)}</li>`).join('')}</ul></details>`
         : '';
     const references = referencesList.length
-        ? `<details><summary>Sources (${appendix.references.length})</summary><ol>${referencesList.map((item) => {
+        ? `<details><summary>Sources (${referencesList.length})</summary><ol>${referencesList.map((item) => {
             const label = String(item.title || item.attribution || item.url || item.id || item.type)
                 .replace(/\s+/g, ' ').trim();
             const text = escapeHTML(label);
-            return `<li>${item.url && label !== item.url ? `${text} - <a href="${escapeHTML(item.url)}">${escapeHTML(item.url)}</a>` : text}</li>`;
+            return `<li>${item.url && label !== item.url ? `${text} - <a href="${escapeHTML(item.url)}" rel="noopener noreferrer">${escapeHTML(item.url)}</a>` : text}</li>`;
         }).join('')}</ol></details>`
         : '';
     return `<section class="appendix"><h2>Export Context</h2>${resources}${tools}${attachments}${searches}${references}</section>`;
@@ -1717,9 +1771,9 @@ const renderHTMLAppendix = (platform, data) => {
 
 const toMarkdown = (platform, data, fallbackTitle) => {
     const lines = [`# ${data?.name || data?.title || fallbackTitle || 'Chat'}\n`];
+    const exported = exportMessages(platform, data);
     lines.push(`_Exported from ${platform} on ${new Date().toISOString()}._\n`);
-    const compact = compactExportMessages(platform, data);
-    for (const { role, channel, name, model, blocks } of compact.messages) {
+    for (const { role, channel, name, model, blocks } of exported) {
         const identity = platform === 'openrouter' ? (name || model) : '';
         const heading = identity ? `${turnLabel(role, channel)} · ${identity}` : turnLabel(role, channel);
         lines.push(`## ${heading}\n`);
@@ -1728,8 +1782,7 @@ const toMarkdown = (platform, data, fallbackTitle) => {
             if (rendered) lines.push(rendered);
         }
     }
-    if (compact.omitted) lines.push(`_Omitted ${compact.omitted} messages after reaching the export budget._\n`);
-    const appendix = renderMarkdownAppendix(platform, data);
+    const appendix = renderMarkdownAppendix(platform, data, exportedBody(exported));
     if (appendix) lines.push(appendix);
     return Clean.whitespace(lines.join('\n'));
 };
@@ -1737,9 +1790,9 @@ const toMarkdown = (platform, data, fallbackTitle) => {
 const toRoleMarkdown = (platform, data, targetRole, fallbackTitle) => {
     const label = roleLabel(targetRole);
     const lines = [`# ${data?.name || data?.title || fallbackTitle || 'Chat'} - ${label} Turns\n`];
+    const exported = exportMessages(platform, data, targetRole);
     lines.push(`_Exported from ${platform} on ${new Date().toISOString()}._\n`);
-    const compact = compactExportMessages(platform, data, targetRole);
-    for (const [turnIndex, item] of compact.messages.entries()) {
+    for (const [turnIndex, item] of exported.entries()) {
         const identity = platform === 'openrouter' ? (item.name || item.model) : '';
         lines.push(`## ${label} ${turnIndex + 1}${identity ? ` · ${identity}` : ''}\n`);
         const blocks = item.blocks;
@@ -1748,14 +1801,14 @@ const toRoleMarkdown = (platform, data, targetRole, fallbackTitle) => {
             if (rendered) lines.push(rendered);
         }
     }
-    if (compact.omitted) lines.push(`_Omitted ${compact.omitted} messages after reaching the export budget._\n`);
     return Clean.whitespace(lines.join('\n'));
 };
 
-const toHTML = (platform, data, fallbackTitle) => {
+const toHTML = (platform, data, fallbackTitle, role = '') => {
+    const scope = exportScope(role);
     let html = '';
-    const compact = compactExportMessages(platform, data);
-    for (const { role, channel, name, model, blocks } of compact.messages) {
+    const exported = exportMessages(platform, data, scope);
+    for (const { role, channel, name, model, blocks } of exported) {
         const cssClass = role === 'user' ? 'u'
             : role === 'system' ? 's'
             : channel === 'reasoning' ? 'r'
@@ -1766,10 +1819,14 @@ const toHTML = (platform, data, fallbackTitle) => {
         const heading = identity ? `${turnLabel(role, channel)} · ${identity}` : turnLabel(role, channel);
         html += `<div class="${cssClass}"><b>${escapeHTML(heading)}</b>${body}</div>\n`;
     }
-    if (compact.omitted) html += `<p class="omitted">${compact.omitted} messages omitted after reaching the export budget.</p>`;
-    const appendix = renderHTMLAppendix(platform, data);
-    const title = data?.name || data?.title || fallbackTitle || 'Chat';
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHTML(title)}</title>
+    const appendix = scope ? '' : renderHTMLAppendix(platform, data, exportedBody(exported));
+    const baseTitle = data?.name || data?.title || fallbackTitle || 'Chat';
+    const title = scope ? `${baseTitle} - ${roleLabel(scope)} Turns` : baseTitle;
+    // The saved file is inert and offline: no script, no remote loads, and no
+    // referrer when a reader follows a source link.
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHTML(title)}</title>
 <style>*{box-sizing:border-box}body{font-family:ui-monospace,monospace;max-width:900px;margin:0 auto;padding:20px;background:#0d1117;color:#c9d1d9;font-size:13px}
 .u{background:#161b22;padding:16px;margin:12px 0;border-radius:8px;border-left:3px solid #58a6ff}
 .a{background:#0d1117;padding:16px;margin:12px 0;border-radius:8px;border-left:3px solid #7ee787}.s{background:#161b22;padding:16px;margin:12px 0;border-radius:8px;border-left:3px solid #a371f7}
@@ -1778,7 +1835,7 @@ const toHTML = (platform, data, fallbackTitle) => {
 b{color:#58a6ff;display:block;margin-bottom:8px;font-size:11px;text-transform:uppercase}.a b{color:#7ee787}.s b{color:#a371f7}.r b{color:#a371f7}.t b{color:#f2cc60}.omitted{color:#8b949e;font-style:italic}
 pre{white-space:pre-wrap;margin:0}.artifact,.tool-call,.tool-result,.thinking{background:#21262d;padding:12px;margin:12px 0;border-radius:6px;border:1px solid #30363d}
 .tool-result{border-left:3px solid #f2cc60}.tool-call{border-left:3px solid #58a6ff}.artifact{border-left:3px solid #f0883e}.thinking{border-left:3px solid #a371f7}
-.art-title,.block-title{color:#f0883e;font-weight:600;margin-bottom:8px}.appendix{margin:28px 0;padding-top:16px;border-top:1px solid #30363d}.appendix h2{font-size:14px}.appendix details{background:#161b22;border:1px solid #30363d;border-radius:8px;margin:10px 0;padding:10px}.appendix summary{cursor:pointer;color:#58a6ff;font-weight:600}</style></head><body><header><h1>${escapeHTML(title)}</h1><p>${escapeHTML(`Exported from ${platform} on ${new Date().toISOString()}`)}</p></header>${html}${appendix}</body></html>`;
+.art-title,.block-title{color:#f0883e;font-weight:600;margin-bottom:8px}.appendix{margin:28px 0;padding-top:16px;border-top:1px solid #30363d}.appendix h2{font-size:14px}.appendix details{background:#161b22;border:1px solid #30363d;border-radius:8px;margin:10px 0;padding:10px}.appendix summary{cursor:pointer;color:#58a6ff;font-weight:600}</style></head><body><header><h1>${escapeHTML(title)}</h1><p>${escapeHTML(`Exported from ${platform} on ${new Date().toISOString()}.`)}</p></header>${html}${appendix}</body></html>`;
 };
 
 const collectRegexMatches = (value, source, flags, max) => {
@@ -1811,7 +1868,7 @@ const matchComparable = (needle, haystack) =>
 const diffComparable = (left, right) => left.filter((item) => !matchComparable(item, right));
 
 // ---------------------------------------------------------------------------
-// Worker dispatcher
+// Command dispatcher
 
 const handlers = {
     clean: ({ platform, raw }) => {
@@ -1825,9 +1882,20 @@ const handlers = {
     domConversation: ({ raw }) => CleanJSON.domConversation(raw),
     normalize: ({ platform, raw }) => normalizeConversation(platform, raw),
     markdown: ({ platform, raw, fallbackTitle }) => toMarkdown(platform, raw, fallbackTitle),
-    html: ({ platform, raw, fallbackTitle }) => toHTML(platform, raw, fallbackTitle),
+    html: ({ platform, raw, fallbackTitle, role }) => toHTML(platform, raw, fallbackTitle, role),
     role: ({ platform, raw, role, fallbackTitle }) => toRoleMarkdown(platform, raw, role, fallbackTitle),
-    llm: ({ platform, raw, clean, fallbackTitle, fallbackId }) => toLLMJSON(platform, raw, clean, fallbackTitle, fallbackId),
+    llm: ({ platform, raw, clean, fallbackTitle, fallbackId, role }) =>
+        toLLMJSON(platform, raw, clean, fallbackTitle, fallbackId, role),
+    // Message counts for the panel's status line, using the same active-branch
+    // selection as every export format.
+    count: ({ raw }) => {
+        const counts = { total: 0, user: 0, assistant: 0 };
+        for (const { role } of selectConversationEntries(raw).entries) {
+            counts.total += 1;
+            if (role === 'user' || role === 'assistant') counts[role] += 1;
+        }
+        return counts;
+    },
     hasUsableMessages: ({ raw }) => hasUsableMessages(raw),
     diff: ({ platform, raw, domSnapshot }) => {
         const normalized = normalizeConversation(platform, raw);
@@ -1898,19 +1966,6 @@ const runParserCommand = (cmd, args = {}) => {
     return handlers[cmd](args || {});
 };
 
-// Loaded as a content script, this file also exposes a compatibility parser.
-// page-bridge.js prefers the Worker entrypoint and uses this only if extension
-// Worker startup is unavailable in the current Firefox configuration.
 if (typeof window !== 'undefined' && window.__chatToolkit) {
     window.__chatToolkit.runParserCommand = runParserCommand;
-} else if (typeof self !== 'undefined') {
-    self.addEventListener('message', (event) => {
-        const { id, cmd, args } = event.data || {};
-        try {
-            const result = runParserCommand(cmd, args);
-            self.postMessage({ id, result });
-        } catch (err) {
-            self.postMessage({ id, error: err?.message || String(err) });
-        }
-    });
 }

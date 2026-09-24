@@ -13,16 +13,19 @@
     if (!CT) return;
 
     const {
-        PLATFORM, COLORS, isGoogle, safeStringify, unwrap,
+        PLATFORM, isGoogle, safeStringify,
         getCurrentId, getClaudeOrgId,
         fetchClaude, fetchClaudeRawAndMessages, fetchChatGPT, chatGPTFetch, fetchGrok, fetchOpenRouter,
         fetchGemini, extractGeminiConversation,
         fetchChatGPTSessionBundle, fetchClaudeSessionBundle,
         captureDOMSnapshot, DOM, DOM_PROBES,
-        setPageCapture, withPageCapture, getPageState, waitForPageState,
+        setPageCapture, withPageCapture, getPageState,
         emitPageReport, parserCall,
         notify, copyToClipboard, showReport, createPanel
     } = CT;
+    const model = CT.model || globalThis.ChatToolkitModel || null;
+    const panel = () => CT.panel?.() || null;
+    const providerName = model?.PROVIDERS?.[PLATFORM]?.name || PLATFORM;
 
     // ---- platform-aware raw data fetch -----------------------------------
 
@@ -53,27 +56,11 @@
         });
     };
 
-    // Decode any captured batchexecute response into Gemini turns.
-    const messagesFromCapture = () => {
-        const pageState = getPageState();
-        const entries = pageState?.captures?._entries;
-        if (!Array.isArray(entries)) return null;
-        for (const cap of [...entries].reverse()) {
-            if (!cap?.batch || (Date.now() - (cap.timestamp || 0)) > 120000) continue;
-            for (const payload of cap.batch) {
-                const extracted = extractGeminiConversation({ data: unwrap(payload?.data) });
-                if (extracted.messages?.length) {
-                    return { name: document.title, ...extracted, _source: 'xhr', _raw: payload.data };
-                }
-            }
-        }
-        return null;
-    };
-
     // Gemini/AI Studio extraction, most-reliable source first:
     //   1. Active batchexecute replay (Gemini only) — fresh, full conversation.
-    //   2. Passively captured batchexecute traffic, if the hooks saw any.
-    //   3. The rendered DOM.
+    //   2. The rendered DOM.
+    // (Earlier versions also looked for page-hook captures here, but reset the
+    // capture buffer immediately before reading it, so that step never ran.)
     const extractGoogle = async () => {
         if (PLATFORM === 'gemini') {
             try {
@@ -83,7 +70,7 @@
                     const extracted = extractGeminiConversation(fetched);
                     if (extracted.messages.length) {
                         return {
-                            name: document.title,
+                            name: CT.geminiTitle?.() || document.title,
                             ...extracted,
                             messages: backfillAssistant(extracted.messages),
                             _source: 'api',
@@ -95,13 +82,6 @@
                 console.warn('[Chat Toolkit] Gemini API fetch failed, falling back', e);
             }
         }
-
-        // Make sure hooks are live, then check for captured traffic.
-        await setPageCapture('start');
-        try {
-            const captured = messagesFromCapture();
-            if (captured) return captured;
-        } catch {}
 
         return PLATFORM === 'gemini' ? DOM.gemini() : DOM.aistudio();
     };
@@ -296,21 +276,51 @@
         }
     };
 
-    const panelStoreText = (status) => {
-        if (!status?.enabled) return 'Recording: off';
+    // Readable footer text. Detailed counters stay in the footer's tooltip
+    // and in diagnostic reports.
+    const researchText = (status) => {
+        if (!status?.enabled) return 'Research recording off';
         const summary = status?.summary || {};
         const stored = Array.isArray(summary.stored_sessions) ? summary.stored_sessions.length : 0;
         const known = Array.isArray(summary.known_sessions) ? summary.known_sessions.length : 0;
         const markers = summary.marker_count || 0;
         const captures = summary.capture_count || 0;
+        if (!status?.success && !known && !markers && !captures) return 'Research recording on, waiting for research activity';
+        const total = Math.max(known, stored);
+        return `Research recording on, ${stored} of ${total} research session${total === 1 ? '' : 's'} stored`;
+    };
+    const researchDetail = (status) => {
+        const summary = status?.summary || {};
         const missing = Array.isArray(status?.missing_probes) ? status.missing_probes.length : 0;
-        if (!status?.success && !known && !markers && !captures) return 'Recording: on; waiting for research traffic';
-        return `Recording: on | ${stored}/${Math.max(known, stored)} sessions | ${markers} events | ${captures} captures${missing ? ` | ${missing} missing` : ''}`;
+        return [`${summary.marker_count || 0} events`, `${summary.capture_count || 0} captures`,
+            missing ? `${missing} sessions missing` : '', status?.storage_error || ''].filter(Boolean).join(', ');
+    };
+
+    let researchStatus = null;
+    let researchTimer = null;
+    let snifferActive = false;
+
+    // Shown only while a diagnostic is actually running; nothing is shown
+    // when all of them are off.
+    const renderFooter = () => {
+        const parts = [];
+        if (PLATFORM === 'chatgpt' && researchStatus?.enabled) parts.push(researchText(researchStatus));
+        if (snifferActive) parts.push('Network inspector recording');
+        if (CT.pageHooksEnabled?.()) parts.push('Page hooks on');
+        panel()?.setActivity(parts);
     };
 
     const updatePassiveStoreStatus = async (create = false) => {
         const status = await passiveStoreStatus(create);
-        CT.setPanelStatus?.(panelStoreText(status), status?.storage_error || 'Passive ChatGPT MCP/telemetry store');
+        researchStatus = status;
+        renderFooter();
+        // Poll only while recording is on, so an idle tab sends no messages.
+        if (status?.enabled && !researchTimer) {
+            researchTimer = setInterval(() => void updatePassiveStoreStatus(false), 15000);
+        } else if (!status?.enabled && researchTimer) {
+            clearInterval(researchTimer);
+            researchTimer = null;
+        }
         return status;
     };
 
@@ -366,7 +376,7 @@
             if (!status?.enabled) throw new Error('Diagnostic recording was stopped');
             const missing = Array.isArray(status?.missing_probes) ? status.missing_probes : [];
             for (const probe of missing.slice(0, 2)) {
-                CT.setPanelStatus?.('store: priming mcp', 'Fetching missing deep-research state');
+                panel()?.setActivity(['Fetching missing research state…']);
                 try {
                     status = await fetchAndStoreMcpProbe(probe);
                 } catch (error) {
@@ -671,130 +681,99 @@
     const safeFilename = (name) => String(name || 'chat').replace(/[\x00-\x1f<>:"/\\|?*]+/g, '_').slice(0, 80);
     const todayStamp = () => new Date().toISOString().slice(0, 10);
 
-    // ---- actions ---------------------------------------------------------
+    // ---- exports ---------------------------------------------------------
 
-    const exportChat = async (format) => {
-        try {
-            const { raw, clean } = await getActiveConversation();
-            const name = safeFilename(clean.name || clean.title || raw?.name || raw?.title);
-            const base = `${PLATFORM}_${name}_${todayStamp()}`;
-            const fallbackTitle = clean.name || clean.title || raw?.name || raw?.title || document.title;
-            const fallbackId = getCurrentId() || '';
+    const EXPORT_FORMATS = {
+        md: { label: 'Markdown', extension: 'md', type: 'text/markdown' },
+        json: { label: 'JSON', extension: 'json', type: 'application/json' },
+        html: { label: 'HTML', extension: 'html', type: 'text/html' }
+    };
+    const SCOPE_LABELS = { all: '', user: 'user ', assistant: 'assistant ' };
 
-            if (format === 'json') {
-                const llm = await parserCall('llm', {
-                    platform: PLATFORM, raw, clean, fallbackTitle, fallbackId
-                });
-                await download(JSON.stringify(llm, null, 2), base + '.json');
-            } else if (format === 'md') {
-                const md = await parserCall('markdown', { platform: PLATFORM, raw, fallbackTitle });
-                await download(md, base + '.md', 'text/markdown');
-            } else {
-                const html = await parserCall('html', { platform: PLATFORM, raw, fallbackTitle });
-                await download(html, base + '.html', 'text/html');
-            }
-
-            notify(`Exported ${format.toUpperCase()}`, raw._source === 'dom' ? '(DOM)' : '');
-        } catch (e) {
-            notify('Export failed', e.message);
-            console.error('[Chat Toolkit]', e);
-        }
+    // Scope and format come from the clicked surface (panel or popup). A
+    // legacy caller without them uses the panel's remembered selection.
+    const resolveSelection = (options = {}) => {
+        const prefs = panel()?.prefs || {};
+        const scope = ['all', 'user', 'assistant'].includes(options.scope) ? options.scope
+            : ['all', 'user', 'assistant'].includes(prefs.scope) ? prefs.scope : 'all';
+        const format = EXPORT_FORMATS[options.format] ? options.format
+            : EXPORT_FORMATS[prefs.format] ? prefs.format : 'md';
+        return { scope, format };
     };
 
-    const exportRoleTurns = async (role) => {
-        try {
-            const { raw, clean } = await getActiveConversation();
-            const name = safeFilename(clean.name || clean.title);
-            const filename = `${PLATFORM}_${name}_${todayStamp()}_${role}_turns.md`;
-            const fallbackTitle = clean.name || clean.title || raw?.name || raw?.title || document.title;
-            const md = await parserCall('role', { platform: PLATFORM, raw, role, fallbackTitle });
-            await download(md, filename, 'text/markdown');
-            notify(`Exported ${role === 'user' ? 'User' : 'Assistant'} turns`,
-                raw._source === 'dom' ? '(DOM)' : '');
-        } catch (e) {
-            notify('Role export failed', e.message);
-            console.error('[Chat Toolkit]', e);
-        }
+    // One message per line: valid JSON with little whitespace, which keeps
+    // token counts down while staying readable and diff-friendly.
+    const formatExportJSON = (value) => {
+        const { messages = [], ...rest } = value || {};
+        const fields = Object.entries(rest).map(([key, item]) => `${JSON.stringify(key)}: ${JSON.stringify(item)}`);
+        fields.push(`"messages": [${messages.length ? `\n${messages.map((message) => JSON.stringify(message)).join(',\n')}\n` : ''}]`);
+        return `{\n${fields.join(',\n')}\n}\n`;
     };
 
-    const copyChat = async () => {
-        try {
-            const { raw } = await getActiveConversation();
-            const fallbackTitle = raw?.name || raw?.title || document.title;
-            // Run sequentially so the same raw conversation is never cloned
-            // into two Workers at once on very long chats.
-            const md = await parserCall('markdown', { platform: PLATFORM, raw, fallbackTitle });
-            const html = await parserCall('html', { platform: PLATFORM, raw, fallbackTitle });
-            const ok = await copyToClipboard(html, md);
-            notify(ok ? 'Copied' : 'Copy failed', ok ? 'Paste into Word or LLM' : '');
-        } catch (e) {
-            notify('Copy failed', e.message);
-            console.error('[Chat Toolkit]', e);
+    // Retrieves the conversation and renders it in the selected format and
+    // message scope. Markdown role exports use the existing role renderer, so
+    // their content is unchanged from earlier versions.
+    const buildExport = async ({ scope, format }) => {
+        const { raw, clean } = await getActiveConversation();
+        const name = safeFilename(clean.name || clean.title || raw?.name || raw?.title);
+        const fallbackTitle = clean.name || clean.title || raw?.name || raw?.title || document.title;
+        const role = scope === 'all' ? '' : scope;
+        const spec = EXPORT_FORMATS[format];
+        let content;
+        if (format === 'json') {
+            content = formatExportJSON(await parserCall('llm', {
+                platform: PLATFORM, raw, clean, fallbackTitle, fallbackId: getCurrentId() || '', role
+            }));
+        } else if (format === 'md') {
+            content = role
+                ? await parserCall('role', { platform: PLATFORM, raw, role, fallbackTitle })
+                : await parserCall('markdown', { platform: PLATFORM, raw, fallbackTitle });
+        } else {
+            content = await parserCall('html', { platform: PLATFORM, raw, fallbackTitle, role });
         }
+        let counts = null;
+        try { counts = await parserCall('count', { platform: PLATFORM, raw }); } catch {}
+        return {
+            raw, content, role, format, scope, fallbackTitle,
+            type: spec.type,
+            filename: `${PLATFORM}_${name}_${todayStamp()}${role ? `_${role}_turns` : ''}.${spec.extension}`,
+            counts
+        };
     };
 
-    // ---- drag-to-attach --------------------------------------------------
-
-    let dragPill = null;
-    let dragHost = null;
-    const showDragPill = async () => {
-        if (dragPill) { dragHost?.remove(); dragHost = null; dragPill = null; return; }
-        try {
-            const { raw } = await getActiveConversation();
-            const fallbackTitle = raw?.name || raw?.title || document.title;
-            const md = await parserCall('markdown', { platform: PLATFORM, raw, fallbackTitle });
-            const name = safeFilename(raw?.name || raw?.title).slice(0, 40);
-            const filename = `${PLATFORM}_${name}.md`;
-
-            dragPill = document.createElement('div');
-            dragPill.id = 'chat-toolkit-drag';
-            dragPill.draggable = true;
-            dragPill.textContent = 'Drag to attach';
-            dragPill.appendChild(document.createElement('br'));
-            const dragFilename = document.createElement('small');
-            dragFilename.textContent = filename;
-            dragPill.appendChild(dragFilename);
-            dragPill.style.cssText = `
-                position: fixed; bottom: 80px; right: 20px; z-index: 2147483647;
-                background: linear-gradient(135deg, ${COLORS[PLATFORM]}, ${COLORS[PLATFORM]}dd);
-                color: #000; padding: 12px 18px; border-radius: 12px;
-                font: 13px/1.4 ui-monospace, monospace; cursor: grab;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.4); user-select: none;
-            `;
-
-            dragPill.addEventListener('dragstart', (e) => {
-                if (!e.isTrusted || !e.dataTransfer) return;
-                e.dataTransfer.effectAllowed = 'copy';
-                let addedFile = false;
-                try {
-                    if (e.dataTransfer.items?.add) {
-                        e.dataTransfer.items.add(new File([md], filename, { type: 'text/markdown' }));
-                        addedFile = true;
-                    }
-                } catch {}
-                if (!addedFile) {
-                    const dataUrl = 'data:text/markdown;base64,' + btoa(unescape(encodeURIComponent(md)));
-                    e.dataTransfer.setData('DownloadURL', `text/markdown:${filename}:${dataUrl}`);
-                }
-                e.dataTransfer.setData('text/markdown', md);
-                e.dataTransfer.setData('text/plain', md);
-                dragPill.style.opacity = '0.5';
-            });
-
-            dragPill.addEventListener('dragend', () => {
-                if (dragPill) dragPill.style.opacity = '1';
-                notify('Drag finished', 'Drop into a file target');
-            });
-
-            dragPill.addEventListener('click', () => { dragHost?.remove(); dragHost = null; dragPill = null; });
-
-            dragHost = CT.mountPrivateUI(dragPill);
-            document.body.appendChild(dragHost);
-            notify('Drag pill ready', 'Drag to LLM file drop zone');
-        } catch (e) {
-            notify('Failed', e.message);
-            console.error('[Chat Toolkit]', e);
+    // Completeness wording: say where the messages came from instead of
+    // implying a complete backup.
+    const describeExport = (prepared) => {
+        const n = Number(prepared.scope === 'all' ? prepared.counts?.total : prepared.counts?.[prepared.scope]);
+        const count = Number.isFinite(n) ? `${n} ${SCOPE_LABELS[prepared.scope] || ''}message${n === 1 ? '' : 's'}` : 'Messages';
+        const source = prepared.raw?._source;
+        if (source === 'dom') {
+            return { kind: 'warn', detail: `${count} from the loaded page. Messages the page has not loaded are missing.` };
         }
+        if (source === 'indexeddb') return { kind: 'ok', detail: `${count} from OpenRouter's chat storage in this browser.` };
+        return { kind: 'ok', detail: `${count} from ${providerName}.` };
+    };
+
+    const saveChat = async (options) => {
+        const prepared = await buildExport(resolveSelection(options));
+        await download(prepared.content, prepared.filename, prepared.type);
+        const described = describeExport(prepared);
+        return { kind: described.kind, title: `Saved ${EXPORT_FORMATS[prepared.format].label} to Downloads`,
+            detail: `${prepared.filename}. ${described.detail}` };
+    };
+
+    const copyChat = async (options) => {
+        const prepared = await buildExport(resolveSelection(options));
+        // Markdown copies also carry rendered HTML so rich editors paste
+        // formatted text; plain-text destinations receive the Markdown.
+        const html = prepared.format === 'md'
+            ? await parserCall('html', { platform: PLATFORM, raw: prepared.raw,
+                fallbackTitle: prepared.fallbackTitle, role: prepared.role })
+            : prepared.format === 'html' ? prepared.content : '';
+        const ok = await copyToClipboard(html, prepared.content);
+        if (!ok) throw new Error('Firefox did not accept the clipboard write. Try Save file instead.');
+        const described = describeExport(prepared);
+        return { kind: described.kind, title: `Copied ${EXPORT_FORMATS[prepared.format].label}`, detail: described.detail };
     };
 
     // ---- report panel handlers ------------------------------------------
@@ -803,40 +782,39 @@
         onCopy: async (report) => {
             if (!report) return;
             const ok = await copyToClipboard('', report.text);
-            notify(ok ? 'Report copied' : 'Copy failed', ok ? report.filename : '');
+            announce(ok ? { kind: 'ok', title: 'Report copied', detail: report.filename }
+                : { kind: 'error', title: 'Copy failed', detail: 'Firefox did not accept the clipboard write.' });
         },
         onDownload: async (report) => {
             if (!report) return;
             try {
                 await download(report.text, report.filename, report.type);
-                notify('Report saved', report.filename);
+                announce({ kind: 'ok', title: 'Report saved to Downloads', detail: report.filename });
             } catch (e) {
-                notify('Save failed', e.message);
+                announce({ kind: 'error', title: 'Save failed', detail: e.message });
             }
         },
         emitToPage: emitPageReport
     };
-    const display = (report) => showReport({ report, ...reportHandlers });
+    const display = (report) => {
+        const shown = showReport({ report, ...reportHandlers });
+        return { kind: 'info', title: shown?.title || report.title, detail: 'Report opened', quiet: true };
+    };
 
     // ---- diff ------------------------------------------------------------
 
     const runDiff = async () => {
-        try {
-            const { raw } = await getActiveConversation();
-            const domSnapshot = captureDOMSnapshot(PLATFORM);
-            const diff = await parserCall('diff', { platform: PLATFORM, raw, domSnapshot });
+        const { raw } = await getActiveConversation();
+        const domSnapshot = captureDOMSnapshot(PLATFORM);
+        const diff = await parserCall('diff', { platform: PLATFORM, raw, domSnapshot });
 
-            display({
-                title: `${PLATFORM.toUpperCase()} Surface Diff`,
-                summary: `Compared ${diff.api_block_count} normalized API blocks against ${diff.dom_block_count} visible DOM blocks.`,
-                rows: [...diff.dom_only, ...diff.api_only].slice(0, 60),
-                data: diff,
-                filename: `${PLATFORM}_surface_diff.json`
-            });
-        } catch (e) {
-            notify('Diff failed', e.message);
-            console.error('[Chat Toolkit]', e);
-        }
+        return display({
+            title: `${providerName} API and page comparison`,
+            summary: `Compared ${diff.api_block_count} normalized API blocks against ${diff.dom_block_count} visible page blocks.`,
+            rows: [...diff.dom_only, ...diff.api_only].slice(0, 60),
+            data: diff,
+            filename: `${PLATFORM}_surface_diff.json`
+        });
     };
 
     // ---- capture export --------------------------------------------------
@@ -864,7 +842,18 @@
         return null;
     };
 
+    const endSniffer = () => {
+        if (!snifferActive) return false;
+        snifferActive = false;
+        panel()?.setCommand('run-sniffer', { label: 'Network inspector', pressed: null });
+        renderFooter();
+        return true;
+    };
+
     const exportCapture = async (includeAccountDetails = false) => {
+        // A capture replaces this tab's background capture state, which would
+        // silently end a running Network inspector session.
+        const endedSniffer = endSniffer();
         let backgroundCapture = null;
         try {
             await networkCapture('start', 'capture-export');
@@ -905,12 +894,13 @@
                 };
             });
             const name = safeFilename(manifest.title);
-            await download(safeStringify(manifest),
-                `${PLATFORM}_${name}_${todayStamp()}.capture.json`, 'application/json');
-            notify('Capture exported', 'Live manifest saved');
-        } catch (e) {
-            notify('Capture failed', e.message);
-            console.error('[Chat Toolkit]', e);
+            const filename = `${PLATFORM}_${name}_${todayStamp()}.capture.json`;
+            await download(safeStringify(manifest), filename, 'application/json');
+            return {
+                kind: 'ok',
+                title: includeAccountDetails ? 'Account capture saved to Downloads' : 'Diagnostic capture saved to Downloads',
+                detail: `${filename}${endedSniffer ? '. The Network inspector session ended.' : ''}`
+            };
         } finally {
             await networkCapture('stop', 'capture-export');
         }
@@ -934,122 +924,124 @@
     };
 
     const runExplorer = async () => {
-        try {
-            let data;
-            let rows;
-            let summary;
-            if (PLATFORM === 'claude') {
-                const id = getCurrentId();
-                const { raw, messages } = await fetchClaudeRawAndMessages(id);
-                rows = getAllKeys({ raw, messages }).slice(0, 60);
-                data = {
-                    payload_summary: {
-                        raw_messages: raw?.chat_messages?.length || 0,
-                        rendered_messages: messages?.chat_messages?.length || 0,
-                        conversation_id: raw?.uuid || id || '',
-                        title: raw?.name || document.title
-                    },
-                    schema_paths: rows
-                };
-                summary = `Fetched Claude conversation metadata. Raw messages: ${data.payload_summary.raw_messages}. Rendered messages: ${data.payload_summary.rendered_messages}.`;
-            } else if (PLATFORM === 'chatgpt') {
-                const conversation = await fetchChatGPT(getCurrentId());
-                const domData = DOM.chatgpt();
-                const apiClean = await parserCall('clean', { platform: 'chatgpt', raw: conversation });
-                const source = apiClean.messages.length ? 'api' : (domData.messages.length ? 'dom' : 'api');
-                rows = getAllKeys(conversation).slice(0, 60);
-                const sessionBundle = await buildSessionBundle(conversation);
-                const roleCounts = apiClean.messages.reduce((counts, message) => {
-                    const role = message.role || 'unknown';
-                    counts[role] = (counts[role] || 0) + 1;
-                    return counts;
-                }, {});
-                data = {
-                    source,
-                    conversation_summary: {
-                        id: conversation.conversation_id || conversation.id || getCurrentId() || '',
-                        title: conversation.title || document.title,
-                        model: conversation.default_model_slug || '',
-                        mapping_nodes: Object.keys(conversation.mapping || {}).length,
-                        message_count: apiClean.messages.length,
-                        role_counts: roleCounts
-                    },
-                    schema_paths: rows,
-                    dom: compactDOMSnapshot(domData),
-                    session_bundle: sessionBundle
-                };
-                summary = `Fetched ChatGPT conversation metadata. Mapping nodes: ${data.conversation_summary.mapping_nodes}. Visible source: ${source}. DOM messages: ${data.dom.message_count}. Lean session resources: ${sessionBundle?.summary?.ok || 0}/${sessionBundle?.summary?.requested || 0}.`;
-            } else if (PLATFORM === 'openrouter') {
-                const conversation = await fetchOpenRouter(getCurrentId());
-                const apiClean = await parserCall('clean', { platform: 'openrouter', raw: conversation });
-                rows = getAllKeys(conversation).slice(0, 60);
-                const reasoningMessages = apiClean.messages.filter((message) => message.reasoning).length;
-                data = {
-                    conversation_summary: {
-                        id: conversation.id || getCurrentId() || '',
-                        title: conversation.title || document.title,
-                        model: conversation.model || '',
-                        message_count: apiClean.messages.length,
-                        reasoning_message_count: reasoningMessages,
-                        source: conversation._source || 'indexeddb'
-                    },
-                    schema_paths: rows
-                };
-                summary = `Read OpenRouter chat storage. Messages: ${apiClean.messages.length}. Reasoning turns: ${reasoningMessages}.`;
-            } else if (PLATFORM === 'grok') {
-                const conversation = await fetchGrok(getCurrentId());
-                const apiClean = await parserCall('clean', { platform: 'grok', raw: conversation });
-                rows = getAllKeys(conversation).slice(0, 60);
-                data = {
-                    conversation_summary: {
-                        id: apiClean.id || getCurrentId() || '',
-                        title: apiClean.title || document.title,
-                        message_count: apiClean.messages.length,
-                        response_node_count: conversation.responseNodes?.length || 0,
-                        selected_response_id: conversation._selected_response_id,
-                        source: conversation._source,
-                        metadata_error: conversation._metadata_error
-                    },
-                    schema_paths: rows
-                };
-                summary = `Fetched Grok conversation history. Messages: ${apiClean.messages.length}.`;
-            } else {
-                const extracted = await extractGoogle();
-                rows = getAllKeys(extracted).slice(0, 60);
-                data = {
-                    conversation_summary: {
-                        title: extracted?.name || document.title,
-                        message_count: extracted?.messages?.length || 0,
-                        source: extracted?._source || 'unknown'
-                    },
-                    schema_paths: rows
-                };
-                summary = `Fetched ${PLATFORM} page metadata. Messages: ${data.conversation_summary.message_count}. Source: ${data.conversation_summary.source}.`;
-            }
-
-            display({
-                title: `${PLATFORM.toUpperCase()} API Explorer`,
-                summary,
-                rows,
-                data,
-                filename: `${PLATFORM}_api_explorer.json`
-            });
-        } catch (e) {
-            console.error('[Explorer]', e);
-            notify('Explorer failed', e.message);
+        let data;
+        let rows;
+        let summary;
+        if (PLATFORM === 'claude') {
+            const id = getCurrentId();
+            if (!id) throw new Error('No chat ID');
+            const { raw, messages } = await fetchClaudeRawAndMessages(id);
+            rows = getAllKeys({ raw, messages }).slice(0, 60);
+            data = {
+                payload_summary: {
+                    raw_messages: raw?.chat_messages?.length || 0,
+                    rendered_messages: messages?.chat_messages?.length || 0,
+                    conversation_id: raw?.uuid || id || '',
+                    title: raw?.name || document.title
+                },
+                schema_paths: rows
+            };
+            summary = `Fetched Claude conversation metadata. Raw messages: ${data.payload_summary.raw_messages}. Rendered messages: ${data.payload_summary.rendered_messages}.`;
+        } else if (PLATFORM === 'chatgpt') {
+            const conversation = await fetchChatGPT(getCurrentId());
+            const domData = DOM.chatgpt();
+            const apiClean = await parserCall('clean', { platform: 'chatgpt', raw: conversation });
+            const source = apiClean.messages.length ? 'api' : (domData.messages.length ? 'dom' : 'api');
+            rows = getAllKeys(conversation).slice(0, 60);
+            const sessionBundle = await buildSessionBundle(conversation);
+            const roleCounts = apiClean.messages.reduce((counts, message) => {
+                const role = message.role || 'unknown';
+                counts[role] = (counts[role] || 0) + 1;
+                return counts;
+            }, {});
+            data = {
+                source,
+                conversation_summary: {
+                    id: conversation.conversation_id || conversation.id || getCurrentId() || '',
+                    title: conversation.title || document.title,
+                    model: conversation.default_model_slug || '',
+                    mapping_nodes: Object.keys(conversation.mapping || {}).length,
+                    message_count: apiClean.messages.length,
+                    role_counts: roleCounts
+                },
+                schema_paths: rows,
+                dom: compactDOMSnapshot(domData),
+                session_bundle: sessionBundle
+            };
+            summary = `Fetched ChatGPT conversation metadata. Mapping nodes: ${data.conversation_summary.mapping_nodes}. Visible source: ${source}. DOM messages: ${data.dom.message_count}. Lean session resources: ${sessionBundle?.summary?.ok || 0}/${sessionBundle?.summary?.requested || 0}.`;
+        } else if (PLATFORM === 'openrouter') {
+            const conversation = await fetchOpenRouter(getCurrentId());
+            const apiClean = await parserCall('clean', { platform: 'openrouter', raw: conversation });
+            rows = getAllKeys(conversation).slice(0, 60);
+            const reasoningMessages = apiClean.messages.filter((message) => message.reasoning).length;
+            data = {
+                conversation_summary: {
+                    id: conversation.id || getCurrentId() || '',
+                    title: conversation.title || document.title,
+                    model: conversation.model || '',
+                    message_count: apiClean.messages.length,
+                    reasoning_message_count: reasoningMessages,
+                    source: conversation._source || 'indexeddb'
+                },
+                schema_paths: rows
+            };
+            summary = `Read OpenRouter chat storage. Messages: ${apiClean.messages.length}. Reasoning turns: ${reasoningMessages}.`;
+        } else if (PLATFORM === 'grok') {
+            const conversation = await fetchGrok(getCurrentId());
+            const apiClean = await parserCall('clean', { platform: 'grok', raw: conversation });
+            rows = getAllKeys(conversation).slice(0, 60);
+            data = {
+                conversation_summary: {
+                    id: apiClean.id || getCurrentId() || '',
+                    title: apiClean.title || document.title,
+                    message_count: apiClean.messages.length,
+                    response_node_count: conversation.responseNodes?.length || 0,
+                    selected_response_id: conversation._selected_response_id,
+                    source: conversation._source,
+                    metadata_error: conversation._metadata_error
+                },
+                schema_paths: rows
+            };
+            summary = `Fetched Grok conversation history. Messages: ${apiClean.messages.length}.`;
+        } else {
+            const extracted = await extractGoogle();
+            rows = getAllKeys(extracted).slice(0, 60);
+            data = {
+                conversation_summary: {
+                    title: extracted?.name || document.title,
+                    message_count: extracted?.messages?.length || 0,
+                    source: extracted?._source || 'unknown'
+                },
+                schema_paths: rows
+            };
+            summary = `Fetched ${PLATFORM} page metadata. Messages: ${data.conversation_summary.message_count}. Source: ${data.conversation_summary.source}.`;
         }
+
+        return display({
+            title: `${providerName} API inspector`,
+            summary,
+            rows,
+            data,
+            filename: `${PLATFORM}_api_explorer.json`
+        });
     };
 
-    // ---- sniffer ---------------------------------------------------------
+    // ---- network inspector -----------------------------------------------
 
+    // First selection starts a metadata-only recording of this tab's provider
+    // requests; the next selection shows the report and stops it. No request
+    // is generated and no response body is kept.
     const runSniffer = async () => {
-        let started = false;
+        if (!snifferActive) {
+            const started = await networkCapture('start', 'network-inspector');
+            if (!started?.success) throw new Error(started?.error || 'Network recording is unavailable in this tab');
+            snifferActive = true;
+            panel()?.setCommand('run-sniffer', { label: 'Show network report', pressed: true });
+            renderFooter();
+            return { kind: 'info', title: 'Network inspector recording',
+                detail: 'Use the site, then select Show network report. Only request metadata is kept, in memory.' };
+        }
         try {
-            const startResult = await networkCapture('start', 'network-inspector');
-            started = !!startResult?.success;
-            // A short observation window catches in-flight natural traffic.
-            // No platform fetch or MCP call is generated by this action.
-            await CT.sleep(250);
             const backgroundCapture = await networkCapture('get', 'network-inspector');
             const requests = requestEntries(backgroundCapture);
             const streams = backgroundCapture?.streams || { websocket: [], eventsource: [] };
@@ -1102,7 +1094,7 @@
                 ...(streams.eventsource || []).slice(-10).map((stream) => ({
                     transport: 'eventsource',
                     url: String(stream.url || '').slice(0, 120),
-                messages: Array.isArray(stream.messages) ? stream.messages.length : 0
+                    messages: Array.isArray(stream.messages) ? stream.messages.length : 0
                 }))
             ];
             const deepResearchRows = deepResearch.captures.map((item) => ({
@@ -1129,12 +1121,14 @@
             }));
 
             const backgroundReady = !!backgroundCapture?.success;
+            const startedAt = backgroundCapture?.network?.started || backgroundCapture?.capture?.started_at || 0;
+            const seconds = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : 0;
             const summary = backgroundReady
-                ? `Metadata-only snapshot of ${requests.length} recent requests across ${rows.length} endpoints. Network generated 0 probe requests and captured 0 response bodies.`
-                : `Metadata-only capture was unavailable${backgroundCapture?.error ? `: ${backgroundCapture.error}` : ''}. Network generated 0 probe requests.`;
+                ? `Metadata-only recording of ${requests.length} requests across ${rows.length} endpoints over ${seconds} s. The inspector generated no requests and kept no response bodies.`
+                : `Metadata-only capture was unavailable${backgroundCapture?.error ? `: ${backgroundCapture.error}` : ''}. The inspector generated no requests.`;
 
-            display({
-                title: `${PLATFORM.toUpperCase()} Network Inspector`,
+            return display({
+                title: `${providerName} Network inspector`,
                 summary,
                 rows: [...deepResearchRows, ...captureRows, ...bodyRows, ...rows, ...transportRows].slice(0, 50),
                 data: {
@@ -1142,6 +1136,7 @@
                     generated_requests: 0,
                     response_bodies_captured: false,
                     started_at: backgroundCapture?.network?.started || null,
+                    duration_seconds: seconds,
                     capture_settings: backgroundCapture?.capture || null,
                     request_count: requests.length,
                     endpoint_count: Object.keys(endpoints).length,
@@ -1160,14 +1155,13 @@
                 },
                 filename: `${PLATFORM}_network_report.json`
             });
-        } catch (e) {
-            notify('Sniffer error', e.message);
         } finally {
-            if (started) await networkCapture('stop', 'network-inspector');
+            endSniffer();
+            await networkCapture('stop', 'network-inspector');
         }
     };
 
-    // ---- dom inspector ---------------------------------------------------
+    // ---- page inspector --------------------------------------------------
 
     const runDOM = () => {
         const probes = DOM_PROBES[PLATFORM] || { messages: [], code: [], attachments: [] };
@@ -1191,8 +1185,8 @@
         }
 
         const snapshot = captureDOMSnapshot(PLATFORM);
-        display({
-            title: `${PLATFORM.toUpperCase()} DOM Inspector`,
+        return display({
+            title: `${providerName} Page inspector`,
             summary: `Matched ${results.length} platform selectors on the active page.`,
             rows: results,
             data: {
@@ -1212,24 +1206,35 @@
         });
     };
 
-    // ---- action dispatch -------------------------------------------------
+    // ---- research recording ---------------------------------------------
 
     const changeRecording = async (mode) => {
         const result = await browser.runtime.sendMessage({ action: `diagnostics-${mode}` });
-        if (!result?.success) throw new Error(result?.error || 'Could not change diagnostic recording');
+        if (!result?.success) throw new Error(result?.error || 'Could not change research recording');
         if (mode === 'clear') await setPageCapture('clear');
-        CT.setPanelStatus?.(result.enabled ? 'Recording: on' : 'Recording: off');
-        notify('Diagnostics', mode === 'clear' ? 'Recorded data cleared' : result.enabled ? 'Recording this tab locally' : 'Recording stopped');
+        await updatePassiveStoreStatus(false);
+        if (mode === 'start') {
+            return { kind: 'ok', title: 'Research recording on',
+                detail: 'Recording ChatGPT research traffic in this tab, in memory only. Reloading or closing the tab clears it.' };
+        }
+        if (mode === 'stop') {
+            return { kind: 'info', title: 'Research recording stopped',
+                detail: 'What was recorded stays in memory until you clear it, reload, or close the tab.' };
+        }
+        return { kind: 'ok', title: 'Research data cleared', detail: 'Recording is off for this tab.' };
     };
+
+    // ---- action dispatch -------------------------------------------------
 
     const ACTIONS = {
         copy: copyChat,
-        drag: showDragPill,
-        'export-json': () => exportChat('json'),
-        'export-md': () => exportChat('md'),
-        'export-html': () => exportChat('html'),
-        'export-user-turns': () => exportRoleTurns('user'),
-        'export-assistant-turns': () => exportRoleTurns('assistant'),
+        save: saveChat,
+        // Earlier direct-export names, kept for compatibility.
+        'export-json': () => saveChat({ scope: 'all', format: 'json' }),
+        'export-md': () => saveChat({ scope: 'all', format: 'md' }),
+        'export-html': () => saveChat({ scope: 'all', format: 'html' }),
+        'export-user-turns': () => saveChat({ scope: 'user', format: 'md' }),
+        'export-assistant-turns': () => saveChat({ scope: 'assistant', format: 'md' }),
         'export-capture': () => exportCapture(false),
         'export-account-capture': () => exportCapture(true),
         'diagnostics-start': () => changeRecording('start'),
@@ -1238,51 +1243,137 @@
         'fetch-research-state': async () => {
             if (PLATFORM !== 'chatgpt') throw new Error('Research state retrieval is available on ChatGPT');
             await fetchResearchState();
-            notify('Research state', 'Available state saved in this tab’s diagnostics');
+            return { kind: 'ok', title: 'Research state fetched', detail: 'Available state is saved in this tab’s diagnostics.' };
         },
         'enable-page-hooks': async () => {
-            const result = await browser.runtime.sendMessage({ action: 'diagnostics-start' });
-            if (!result?.success) throw new Error(result?.error || 'Diagnostics are unavailable');
-            CT.enablePageHooks?.();
-            notify('Page hooks enabled', 'Used during captures; reload this tab to remove them');
+            if (CT.pageHooksEnabled?.()) return { kind: 'info', title: 'Page hooks are already on' };
+            CT.enablePageHooks();
+            renderFooter();
+            return { kind: 'ok', title: 'Page hooks enabled',
+                detail: 'They instrument this page’s requests during diagnostic captures. Reload the page to remove them.' };
         },
-        'open-help': () => browser.runtime.sendMessage({ action: 'open-help' }),
+        'open-help': async () => { await browser.runtime.sendMessage({ action: 'open-help' }); return null; },
         'run-explorer': runExplorer,
         'run-sniffer': runSniffer,
-        'run-dom': runDOM,
+        'run-dom': async () => runDOM(),
         'run-diff': runDiff
     };
+
+    const FAILURE_TITLES = {
+        copy: 'Copy failed',
+        save: 'Export failed',
+        'export-capture': 'Capture failed',
+        'export-account-capture': 'Capture failed',
+        'run-explorer': 'API inspector failed',
+        'run-sniffer': 'Network inspector failed',
+        'run-dom': 'Page inspector failed',
+        'run-diff': 'Comparison failed'
+    };
+    const ACTION_LABELS = {
+        copy: 'Copy', save: 'Save file',
+        ...Object.fromEntries((model?.ADVANCED || []).map((command) => [command.id, command.label]))
+    };
+
+    const friendlyError = (error) => {
+        const message = error?.message || String(error);
+        if (/^No chat ID$|conversation ID|room ID in the URL|conversation id in URL/i.test(message)) {
+            return 'Open a saved conversation first. This page address does not identify one.';
+        }
+        return message;
+    };
+
+    // Copy and Save confirm on their own button. Warnings, errors, and the
+    // results of other commands appear as a short notification. Reports are
+    // quiet because they open their own window.
+    const announce = (result, actionName = '') => {
+        if (!result?.title) return;
+        const kind = result.kind || 'ok';
+        const shown = panel()?.confirm(actionName, kind, result.title, result.detail || '');
+        if (!shown && !result.quiet) notify(result.title, result.detail || '', kind);
+    };
+
     let activeAction = '';
-    const handleAction = async (actionName) => {
-        const action = ACTIONS[actionName];
-        if (!action) return;
+    const handleAction = async (actionName, options = {}) => {
+        const action = Object.prototype.hasOwnProperty.call(ACTIONS, actionName) ? ACTIONS[actionName] : null;
+        if (!action) return { ok: false, kind: 'error', title: 'Unknown action' };
         if (activeAction) {
-            notify('Chat Toolkit is busy', `${activeAction} is still running`);
-            return;
+            const busy = { kind: 'warn', title: 'Chat Toolkit is busy',
+                detail: `${ACTION_LABELS[activeAction] || activeAction} is still running` };
+            announce(busy, actionName);
+            return { ok: false, ...busy };
         }
         activeAction = actionName;
+        panel()?.setBusy(actionName, true);
         try {
-            await action();
+            const result = await action(options);
+            announce(result, actionName);
+            return { ok: true, ...(result || {}) };
         } catch (error) {
             console.error('[Chat Toolkit] action failed', error);
-            notify('Action failed', error?.message || String(error));
+            const failure = { kind: 'error', title: FAILURE_TITLES[actionName] || 'Action failed', detail: friendlyError(error) };
+            announce(failure, actionName);
+            return { ok: false, ...failure };
         } finally {
+            panel()?.setBusy(actionName, false);
             activeAction = '';
         }
     };
 
-    browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-        if (msg.action === 'ping') { sendResponse({ ok: true }); return; }
-        if (msg.action) void handleAction(msg.action);
+    // Toolbar popup requests. Each resolves with the action's actual outcome.
+    browser.runtime.onMessage.addListener((msg) => {
+        if (!msg?.action) return undefined;
+        if (msg.action === 'status') {
+            return Promise.resolve({
+                platform: PLATFORM,
+                conversation: !!getCurrentId(),
+                context: conversationContext(),
+                busy: activeAction,
+                panel: !!panel()
+            });
+        }
+        if (!Object.prototype.hasOwnProperty.call(ACTIONS, msg.action)) return undefined;
+        return handleAction(msg.action, { scope: msg.scope, format: msg.format });
     });
 
-    const init = () => {
+    // ---- panel lifecycle -------------------------------------------------
+
+    const conversationContext = () => {
+        if (getCurrentId()) return 'Saved conversation open';
+        if (PLATFORM === 'aistudio') return 'Exports the loaded page';
+        return 'Open a saved conversation to export';
+    };
+    // The palette shows a hint only when there is no saved conversation.
+    const conversationHint = () => getCurrentId() || PLATFORM === 'aistudio' ? '' : 'Open a saved chat to export.';
+
+    // Single-page apps change the address without reloading. The background
+    // clears this tab's diagnostics on navigation; mirror that here.
+    let lastHref = location.href;
+    const watchLocation = () => {
+        if (location.href === lastHref) return;
+        lastHref = location.href;
+        endSniffer();
+        panel()?.setHint(conversationHint());
+        if (PLATFORM === 'chatgpt') void updatePassiveStoreStatus(false);
+    };
+
+    const init = async () => {
         if (!document.body || document.getElementById('chat-toolkit-panel')) return;
-        document.body.appendChild(createPanel(handleAction));
-        if (PLATFORM === 'chatgpt') {
-            void updatePassiveStoreStatus(false);
-            setInterval(() => void updatePassiveStoreStatus(false), 30000);
-        }
+        const prefs = model ? await model.loadPrefs() : null;
+        if (document.getElementById('chat-toolkit-panel')) return;
+        document.body.appendChild(createPanel(handleAction, {
+            prefs,
+            onPrefs: (patch) => { if (model) void model.savePrefs(patch); }
+        }));
+        panel()?.setHint(conversationHint());
+        renderFooter();
+        try {
+            browser.storage?.onChanged?.addListener((changes, area) => {
+                const change = model && area === 'local' ? changes[model.PREFS_KEY] : null;
+                if (change) panel()?.applyPrefs(change.newValue);
+            });
+        } catch {}
+        if (PLATFORM === 'chatgpt') void updatePassiveStoreStatus(false);
+        setInterval(watchLocation, 1000);
         // Page transport hooks stay disabled unless explicitly opted into for
         // debugging; normal exports use content-script fetches and DOM parsing.
     };

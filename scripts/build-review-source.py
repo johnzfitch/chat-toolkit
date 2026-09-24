@@ -14,15 +14,20 @@ target.parent.mkdir(parents=True, exist_ok=True)
 
 names = [
     '.gitignore', '.gitattributes', 'README.md', 'LICENSE', 'CONTRIBUTING.md',
-    'SECURITY.md', 'CHANGELOG.md', 'package.json', 'bun.lock',
-    'scripts/build-xpi.py', 'scripts/build-review-source.py', 'scripts/build-icons.ps1',
-    'tests/helpers/toolkit.js', 'docs/security-review.md',
+    'SECURITY.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'package.json', 'bun.lock',
+    'scripts/build-xpi.py', 'scripts/build-review-source.py', 'scripts/build-icons.py',
+    'scripts/capture-listing-screenshots.py',
+    'tests/helpers/toolkit.js',
+    'assets/design/chat-toolkit-mark.svg', 'assets/design/listing-harness/index.html',
+    'assets/design/listing-harness/harness.js',
     '.github/workflows/ci.yml', '.github/PULL_REQUEST_TEMPLATE.md',
     '.github/ISSUE_TEMPLATE/bug_report.md', '.github/ISSUE_TEMPLATE/feature_request.md',
     'amo/LISTING.md', 'amo/PRIVACY.md', 'amo/REVIEWER-NOTES.md', 'amo/SUBMIT.md',
 ]
 names += [p.relative_to(root).as_posix() for p in (root / 'extension-src').rglob('*') if p.is_file()]
 names += [p.relative_to(root).as_posix() for p in (root / 'tests/public').glob('*.test.js')]
+names += [p.relative_to(root).as_posix() for p in (root / 'docs').glob('*.md')]
+names += [p.relative_to(root).as_posix() for p in (root / 'store' / 'icons').glob('*.png')]
 
 for name in names:
     path = root / name
