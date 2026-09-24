@@ -45,7 +45,7 @@ Diagnostics start only from explicit commands in Advanced tools; hiding a button
 
 ## Private windows
 
-Exports work if the user allows the extension in private windows. Diagnostics, page hooks, and preference writes are refused there.
+Exports and inspector reports work if the user allows the extension in private windows. The Network inspector, Diagnostic and Account capture, research recording, page hooks, and preference writes are refused there.
 
 ## Mozilla data-collection declaration
 

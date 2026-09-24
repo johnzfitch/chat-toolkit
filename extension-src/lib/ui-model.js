@@ -84,13 +84,20 @@
         catch { return false; }
     };
 
-    const savePrefs = async (patch) => {
-        const next = normalizePrefs({ ...(await loadPrefs()), ...patch });
-        const area = storageArea();
-        if (area && !inPrivateContext()) {
-            try { await area.set({ [PREFS_KEY]: next }); } catch {}
-        }
-        return next;
+    // Writes are queued so each patch applies to the result of the previous
+    // one; two quick changes (scope, then format) cannot overwrite each other.
+    let writeQueue = Promise.resolve();
+    const savePrefs = (patch) => {
+        const write = writeQueue.then(async () => {
+            const next = normalizePrefs({ ...(await loadPrefs()), ...patch });
+            const area = storageArea();
+            if (area && !inPrivateContext()) {
+                try { await area.set({ [PREFS_KEY]: next }); } catch {}
+            }
+            return next;
+        });
+        writeQueue = write.catch(() => {});
+        return write;
     };
 
     // Primary commands run the selected scope and format. Their labels name

@@ -40,7 +40,7 @@
       <li><strong>Account capture</strong> additionally requests available account and session information. On Claude this can include organization details, settings, memory, project files, tool configuration, and code-session metadata. On ChatGPT it requests a limited set of conversation and custom GPT metadata. This is separate from ordinary exports and Diagnostic capture.</li>
       <li><strong>Enable page hooks</strong> allows request instrumentation in this page during an explicit capture. This may affect site behavior. Reload the page to remove the hooks. The website cannot enable them through its local storage.</li>
     </ul>
-    <p>Background recordings use bounded in-memory buffers. They are not written to extension storage. Clear also removes legacy diagnostic caches left by earlier local versions. Background recording and page hooks are disabled in private windows. Files and clipboard contents that you explicitly export remain until you delete or replace them; Clear does not remove those copies.</p>
+    <p>Background recordings use bounded in-memory buffers. They are not written to extension storage. Clear also removes legacy diagnostic caches left by earlier local versions. In private windows the Network inspector, Diagnostic and Account capture, research recording, and page hooks are refused. Files and clipboard contents that you explicitly export remain until you delete or replace them; Clear does not remove those copies.</p>
 
     <h2>Why Firefox requests permissions</h2>
     <ul>

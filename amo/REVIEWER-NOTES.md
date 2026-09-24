@@ -33,19 +33,19 @@ Required `authenticationInfo` and `websiteContent`: user-initiated requests send
 ## Functional review
 
 1. Install the XPI (or load `extension-src/manifest.json` temporarily) and reload a supported chat. Help & privacy is reachable from the palette menu and the toolbar popup.
-2. Sign in with the provided test account and open a saved conversation with at least two exchanges. On Grok use a `https://grok.com/c/<uuid>` conversation.
+2. Sign in with the reviewer test account and open a saved conversation with at least two exchanges. On Grok use a `https://grok.com/c/<uuid>` conversation.
 3. In the palette: choose **All / User / Assistant** and **.md / .json / .html**, then **Copy** and **Save file**. The button confirms ("Copied"/"Saved"); a loaded-page fallback shows a warning. HTML files render text only and carry `Content-Security-Policy: default-src 'none'`.
 4. **Advanced tools**: API inspector, Page inspector, Compare API and page, and Diagnostic capture open reports or save a `.capture.json`. Network inspector starts on the first click and reports on the second. Account capture (Claude/ChatGPT) additionally reads account resources. On ChatGPT, Record research / Stop / Clear control memory-only recording in that tab; a red light shows while it runs.
 5. Menu: Dock left/right, Reset position, Hide on this site (the toolbar popup can show it again).
-6. Private window (if allowed): exports work; diagnostics, page hooks, and preference writes are refused.
+6. Private window (if allowed): exports and inspector reports work; Network inspector, Diagnostic and Account capture, research recording, page hooks, and preference writes are refused.
 
 Unloaded content and provider-withheld reasoning cannot be recovered. Claude currently supplies no reasoning text.
 
-**Test-account credentials:** supplied in AMO's private reviewer field, not in this archive.
+**Test-account credentials:** none are included in this archive. The publisher must supply dedicated provider test accounts in AMO's private reviewer field before submission.
 
 ## Checks
 
-`bun run test`: 125 tests, 0 failures. `bun run lint:amo`: 0 errors, 1 warning, `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION` (desktop minimum 140 is below Android's consent support at 142; `gecko_android` is deliberately omitted and Android is not claimed). Live checks are listed in `docs/VERIFICATION.md`.
+`bun run test`: 127 tests, 0 failures. `bun run lint:amo`: 0 errors, 1 warning, `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION` (desktop minimum 140 is below Android's consent support at 142; `gecko_android` is deliberately omitted and Android is not claimed). Live checks are listed in `docs/VERIFICATION.md`.
 
 ## Code map
 

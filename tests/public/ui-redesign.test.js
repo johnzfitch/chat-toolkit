@@ -144,6 +144,15 @@ describe('Shared preferences', () => {
         expect(prefs.hiddenSites).toEqual(['chatgpt.com']);
     });
 
+    test('quick successive changes are all kept', async () => {
+        const { model, writes } = loadModel(false);
+        await Promise.all([model.savePrefs({ scope: 'user' }), model.savePrefs({ format: 'json' })]);
+        expect(writes.at(-1).uiPrefs.scope).toBe('user');
+        expect(writes.at(-1).uiPrefs.format).toBe('json');
+        const prefs = await model.loadPrefs();
+        expect([prefs.scope, prefs.format]).toEqual(['user', 'json']);
+    });
+
     test('preferences are written in normal windows and never in private windows', async () => {
         const normal = loadModel(false);
         await normal.model.savePrefs({ format: 'json' });
@@ -332,6 +341,7 @@ describe('Export palette', () => {
 
 function contentHarness({ platform = 'claude', url = 'https://claude.ai/chat/synthetic-chat', raw, origin = 'api', id = 'synthetic-chat' } = {}) {
     let listener;
+    const harness = {};
     const downloads = [];
     const copied = [];
     const parserCalls = [];
@@ -357,6 +367,9 @@ function contentHarness({ platform = 'claude', url = 'https://claude.ai/chat/syn
             async sendMessage(message) {
                 sent.push(message.action);
                 if (message.action === 'download') downloads.push(message);
+                if (message.action === 'network-capture-start' && harness.refuseCapture) {
+                    return { success: false, error: 'Diagnostic recording is disabled in private windows' };
+                }
                 if (message.action.startsWith('network-capture')) return { success: true, network: { requests: [] } };
                 return { success: true };
             }
@@ -364,7 +377,8 @@ function contentHarness({ platform = 'claude', url = 'https://claude.ai/chat/syn
     });
     runInContext(source('lib/ui-model.js'), context);
     runInContext(source('lib/content.js'), context);
-    return { send: (message) => listener(message), downloads, copied, parserCalls, sent, toolkit };
+    Object.assign(harness, { send: (message) => listener(message), downloads, copied, parserCalls, sent, toolkit });
+    return harness;
 }
 
 describe('Content-script export pipeline', () => {
@@ -448,6 +462,15 @@ describe('Content-script export pipeline', () => {
         const second = await app.send({ action: 'run-sniffer' });
         expect(second.detail).toBe('Report opened');
         expect(app.sent).toEqual(['network-capture-start', 'network-capture-get', 'network-capture-stop']);
+    });
+
+    test('a diagnostic capture stops when the background refuses to record (private windows)', async () => {
+        const app = contentHarness();
+        app.refuseCapture = true;
+        const result = await app.send({ action: 'export-capture' });
+        expect(result.ok).toBe(false);
+        expect(result.detail).toBe('Diagnostic recording is disabled in private windows');
+        expect(app.downloads).toHaveLength(0);
     });
 
     test('unknown and inherited action names are ignored', async () => {

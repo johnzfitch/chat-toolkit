@@ -28,7 +28,7 @@ A small light in the palette's title bar shows while any recording, the Network 
 
 ## Retention and controls
 
-Recordings live in memory and are discarded when you clear them, navigate, reload, or close the tab, or restart Firefox. They are never written to disk or restored into another tab or container. Clear also deletes diagnostic caches left by older local versions. Diagnostics and page hooks are disabled in private windows.
+Recordings live in memory and are discarded when you clear them, navigate, reload, or close the tab, or restart Firefox. They are never written to disk or restored into another tab or container. Clear also deletes diagnostic caches left by older local versions. In private windows, the Network inspector, Diagnostic and Account capture, research recording, and page hooks are refused; exports and inspector reports still work if you allow the extension there.
 
 Files and clipboard contents you export remain until you delete or replace them. Removing the extension deletes its stored preferences but not files you saved.
 

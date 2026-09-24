@@ -5,7 +5,7 @@ State of Chat Toolkit at version 1.7.0 and what is open. Everything below is als
 ## Where things are
 
 - Runtime: `extension-src/` (MV2, Firefox desktop 140+). Start with `lib/content.js` (commands), `lib/ui-model.js` (command definitions, accents, icons, styles), `lib/parser-worker.js` (all export rendering).
-- Tests: `bun run test` (public, 125); `bun run test:private` needs the owner's HARs and `tests/private/` (ignored).
+- Tests: `bun run test` (public, 127); `bun run test:private` needs the owner's HARs and `tests/private/` (ignored).
 - Build: `python scripts/build-xpi.py dist/<name>.xpi`, `python scripts/build-review-source.py dist/<name>.zip`. Icons: `python scripts/build-icons.py`.
 - Submission: `amo/SUBMIT.md`, `amo/LISTING.md`, `amo/PRIVACY.md`, `amo/REVIEWER-NOTES.md`.
 - Evidence and rationale: `docs/VERIFICATION.md`, `docs/POLICY_COMPLIANCE.md`, `docs/PERMISSIONS.md`, `docs/DATA_FLOW_AUDIT.md`, `docs/COMMAND_INVENTORY.md`, `docs/EXPORT_FORMAT.md`, `docs/security-review.md`.

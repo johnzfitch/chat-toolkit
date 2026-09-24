@@ -27,7 +27,7 @@ bun audit --json
 python scripts/build-xpi.py dist/reviewed-local.xpi
 ```
 
-September 24 results: 125 public tests pass; 8 private replays pass; lint 0 errors and 1 Android warning. `bun audit` was last run for 1.6.7 (no advisories); dependency pins are unchanged.
+September 24 results: 127 public tests pass; 8 private replays pass; lint 0 errors and 1 Android warning. `bun audit` was last run for 1.6.7 (no advisories); dependency pins are unchanged.
 
 ## Limits
 

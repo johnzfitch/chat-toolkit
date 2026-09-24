@@ -6,10 +6,10 @@ What was actually executed on 2026-09-24, what it showed, and what remains unver
 
 | Check | Result |
 | --- | --- |
-| `bun run test` (public, synthetic) | 125 pass, 0 fail |
+| `bun run test` (public, synthetic) | 127 pass, 0 fail |
 | `bun run test:private` (owner's HAR replays, not in the repository) | 8 pass, 0 fail: two ChatGPT HARs, Claude Cowork, Gemini (Sept 2 and Sept 24), Grok (Sept 23) |
 | `bun run lint:amo` (web-ext 10.7.0) | 0 errors, 0 notices, 1 warning (`KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`; Android not declared) |
-| `python scripts/build-xpi.py dist/chat-toolkit-1.7.0-amo.xpi` | 26 files, 123,828 bytes, SHA-256 `3ce648221a411b13636ab3cc9e78142cf6a673a6257c19666b283de359795c9b` (Python 3.14.6, zlib-ng 1.3.1); every member read back |
+| `python scripts/build-xpi.py dist/chat-toolkit-1.7.0-amo.xpi` | 26 files, 124,045 bytes, SHA-256 `cba376c62519a3402fe8d4efe0ee6ff50b8cc87e05b4daac142d239309600df4` (Python 3.14.6, zlib-ng 1.3.1); every member read back |
 | `python scripts/build-review-source.py dist/chat-toolkit-1.7.0-review-source.zip` | 72 files from the public allowlist; every member read back (its hash changes with any doc edit, so it is printed by the script, not recorded here) |
 
 Public test files: `claude-cowork`, `gemini-history`, `grok-history`, `openrouter`, `public-release` (background diagnostics, private windows, downloads, manifest), `security` (request destinations, closed UI roots, trusted clicks, hostile HTML, page hooks), `ui-redesign` (export fidelity, scoped exports, parser dispatch, preferences, palette, content pipeline, popup, manifest assets), `export-efficiency` (Gemini regression, de-duplication, Claude search sources, JSON layout).

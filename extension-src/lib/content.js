@@ -856,7 +856,10 @@
         const endedSniffer = endSniffer();
         let backgroundCapture = null;
         try {
-            await networkCapture('start', 'capture-export');
+            // The background refuses captures in private windows; the export
+            // must stop there too, not continue without network data.
+            const started = await networkCapture('start', 'capture-export');
+            if (!started?.success) throw new Error(started?.error || 'Diagnostic capture is unavailable in this tab');
             const manifest = await withPageCapture(async () => {
                 const { raw, clean } = await getActiveConversation();
                 const fallbackTitle = clean.name || clean.title || raw?.name || raw?.title || document.title;
