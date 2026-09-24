@@ -1,0 +1,21 @@
+# Private browser captures and generated conversation exports
+*.har
+output/
+tests/private/
+scripts/replay-grok-har.js
+TASKS.md
+GROK-FIX-*.md
+AMO-PREP-*.md
+OPEN-SOURCE-*.md
+# Generated distributions and local tools
+*.xpi
+*.zip
+dist/
+node_modules/
+.cache/
+__pycache__/
+# Credentials must never enter a public repository
+.env
+.env.*
+*.pem
+*.key

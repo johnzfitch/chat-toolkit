@@ -1,0 +1,90 @@
+{
+  "manifest_version": 2,
+  "name": "Chat Toolkit",
+  "version": "1.6.7",
+  "description": "Export AI conversations to JSON, Markdown, or HTML, with supplied reasoning, sources, tool results, and optional diagnostics.",
+  "author": "Zack Fitch <zack@definitelynot.ai>",
+
+  "permissions": [
+    "activeTab",
+    "clipboardWrite",
+    "downloads",
+    "webRequest",
+    "webRequestBlocking",
+    "https://claude.ai/*",
+    "https://api.anthropic.com/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://gemini.google.com/*",
+    "https://aistudio.google.com/*",
+    "https://grok.com/*",
+    "https://openrouter.ai/*"
+  ],
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "chat-toolkit@definitelynot.ai",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["authenticationInfo", "websiteContent"]
+      }
+    }
+  },
+
+  "background": {
+    "scripts": ["lib/background.js"],
+    "persistent": false
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://claude.ai/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://grok.com/*",
+        "https://openrouter.ai/*",
+        "https://gemini.google.com/*",
+        "https://aistudio.google.com/*"
+      ],
+      "js": [
+        "lib/common.js",
+        "lib/dom-helpers.js",
+        "lib/api-fetchers.js",
+        "lib/parser-worker.js",
+        "lib/page-bridge.js",
+        "lib/ui-panel.js",
+        "lib/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "browser_action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    },
+    "default_title": "Chat Toolkit",
+    "default_popup": "popup/popup.html"
+  },
+
+  "options_ui": {
+    "page": "help/privacy.html",
+    "open_in_tab": true
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "96": "icons/icon96.png",
+    "128": "icons/icon128.png"
+  },
+
+  "web_accessible_resources": [
+    "lib/parser-worker.js"
+  ]
+}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Chat Toolkit</title>
+    <style>
+        body { width: 240px; padding: 12px; background: #0d1117; color: #c9d1d9; font: 12px system-ui, sans-serif; margin: 0; }
+        h3 { color: #d4a574; font-size: 11px; margin: 0 0 8px; border-bottom: 1px solid #21262d; padding-bottom: 6px; }
+        .r { display: flex; gap: 5px; }
+        button { flex: 1; padding: 7px; border: none; border-radius: 5px; background: #21262d; color: #c9d1d9; cursor: pointer; font: 11px monospace; }
+        button:hover { background: #30363d; }
+        button:focus-visible, summary:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+        details { margin-top: 10px; line-height: 1.5; }
+        summary { cursor: pointer; }
+        .s { font-size: 10px; color: #6e7681; text-align: center; min-height: 14px; margin-top: 6px; }
+    </style>
+</head>
+<body>
+    <h3>Chat Toolkit</h3>
+    <div class="r">
+        <button data-a="export-json">JSON</button>
+        <button data-a="export-md">MD</button>
+        <button data-a="export-html">HTML</button>
+    </div>
+    <div class="r" style="margin-top: 6px;">
+        <button data-a="export-user-turns">User turns</button>
+        <button data-a="export-assistant-turns">Assistant turns</button>
+    </div>
+    <details>
+        <summary>Diagnostics</summary>
+        <p>Chat Toolkit reports may include private conversation data. Capture records this tab's network traffic while exporting. Files stay local. More controls are in the chat page panel.</p>
+        <div class="r">
+            <button data-a="export-capture">Capture</button>
+            <button data-a="run-diff">Compare API / page</button>
+        </div>
+    </details>
+    <div class="r" style="margin-top: 10px;"><button data-a="open-help">Help &amp; privacy</button></div>
+    <div class="s" role="status"></div>
+    <script src="popup.js"></script>
+</body>
+</html>

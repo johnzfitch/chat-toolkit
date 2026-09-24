@@ -1,0 +1,25 @@
+{
+  "name": "chat-toolkit",
+  "private": true,
+  "version": "1.6.7",
+  "author": "Zack Fitch <zack@definitelynot.ai>",
+  "license": "MIT",
+  "description": "Development and release tools for the Chat Toolkit Firefox extension",
+  "scripts": {
+    "test": "bun test ./tests/public",
+    "lint:amo": "bun node_modules/web-ext/bin/web-ext.js lint --source-dir extension-src --no-config-discovery --output json",
+    "test:private": "bun test ./tests/private"
+  },
+  "devDependencies": {
+    "happy-dom": "20.14.5",
+    "web-ext": "10.7.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnzfitch/chat-toolkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/johnzfitch/chat-toolkit/issues"
+  },
+  "homepage": "https://github.com/johnzfitch/chat-toolkit#readme"
+}

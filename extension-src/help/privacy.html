@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat Toolkit — Help &amp; privacy</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.65 system-ui, sans-serif; }
+    body { max-width: 760px; margin: 3rem auto; padding: 0 1.5rem 3rem; }
+    h1, h2 { line-height: 1.25; }
+    h1 { font-size: 2rem; } h2 { margin-top: 2rem; font-size: 1.3rem; }
+    .intro { font-size: 1.15rem; }
+    .notice { border-left: 4px solid #608ac6; padding: .5rem 1rem; background: light-dark(#f1f5fb, #182334); }
+    li { margin-bottom: .5rem; }
+    code { background: light-dark(#eee, #252525); padding: .1rem .3rem; border-radius: .2rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <p>CHAT TOOLKIT · VERSION 1.6.7</p>
+    <h1>Your conversations, in a file you control.</h1>
+    <p class="intro">Export the conversation you have open to JSON, Markdown, or HTML. Copy formatted text, drag a Markdown file to another app, or export only user or assistant turns.</p>
+    <p>Use the Chat Toolkit panel on a supported chat page, or the extension's toolbar button. Sign in to the provider in that tab and open a saved conversation first. Supported sites are Claude, ChatGPT, Grok at grok.com, Gemini, Google AI Studio, and OpenRouter.</p>
+    <p>The available history depends on what the provider returns. Exports retain supplied reasoning, citations, tool results, and attachments where supported. Chat Toolkit cannot recover reasoning or messages the service does not expose. Some sites or conversation types use the visible page as a fallback; content that was not loaded may be absent.</p>
+
+    <h2>Privacy policy</h2>
+    <p>Effective September 23, 2026, for Chat Toolkit 1.6.7.</p>
+    <p>Created by Zack Fitch. Licensed under the MIT License, copyright 2026 Zack Fitch. For support or privacy questions, email <a href="mailto:zack@definitelynot.ai">zack@definitelynot.ai</a>.</p>
+    <p>Chat Toolkit has no developer-operated collection server, analytics, advertising, or automatic report uploads. It processes conversations in your browser. Exports go to your downloads folder; Copy writes to your clipboard; dragging a file shares it with the destination you choose.</p>
+    <p>When you request an export or an API diagnostic, Chat Toolkit contacts the current chat provider over HTTPS using your existing signed-in session. Requests can include the provider's session cookies or access token, conversation and message identifiers, organization or project identifiers, and request metadata needed to retrieve the selected content. These requests go to the provider, not to the extension's developer. The provider's own privacy policy applies to its services.</p>
+    <p>Firefox's installation prompt declares <strong>authentication information</strong> and <strong>website content</strong> for those authenticated requests and their cookies, identifiers, and request metadata. Chat Toolkit does not ask you to enter a password or buy a separate extension account.</p>
+
+    <h2>Optional diagnostics</h2>
+    <p class="notice">Diagnostic reports can contain private conversations, account information, URLs, request bodies, and tool results. Inspect a report before sharing it. Reports appear in the chat page's panel and may also appear in that tab's developer console.</p>
+    <ul>
+      <li><strong>API, DOM, and Diff</strong> inspect the current conversation's API data, visible page, or differences between them.</li>
+      <li><strong>Network</strong> records a short window of request metadata. <strong>Capture</strong> saves conversation data, page details, and bounded network diagnostics while the export runs.</li>
+      <li><strong>Record</strong> starts local recording of ChatGPT research responses and related events in this tab. <strong>Stop</strong> stops new recording. <strong>Clear</strong> removes recorded data. Recording starts off; navigating, reloading, or closing the tab clears the background recording. Memory can also be discarded when Firefox unloads the extension background page. No recording is restored in a different tab or container.</li>
+      <li><strong>Fetch ChatGPT research state</strong> sends an authenticated request to ChatGPT for research sessions found in this tab's recording. It runs only when you click it.</li>
+      <li><strong>Export account capture</strong> additionally requests available account and session information. On Claude this can include organization details, settings, memory, project files, tool configuration, and code-session metadata. On ChatGPT it requests a limited set of conversation and custom GPT metadata. This is separate from ordinary exports and Capture.</li>
+      <li><strong>Enable page hooks</strong> allows request instrumentation in this page during an explicit capture. This may affect site behavior. Reload the page to remove the hooks. The website cannot enable them through its local storage.</li>
+    </ul>
+    <p>Background recordings use bounded in-memory buffers. They are not written to extension storage. Clear also removes legacy diagnostic caches left by earlier local versions. Background recording and page hooks are disabled in private windows. Files and clipboard contents that you explicitly export remain until you delete or replace them; Clear does not remove those copies.</p>
+
+    <h2>Why Firefox requests permissions</h2>
+    <ul>
+      <li><strong>Access to supported sites:</strong> read the current conversation and request its history using your signed-in session.</li>
+      <li><strong>Active tab:</strong> direct toolbar actions to the chat you are viewing.</li>
+      <li><strong>Downloads and clipboard:</strong> save exported files and copy formatted conversations.</li>
+      <li><strong>Web requests:</strong> implement the optional Network and Capture tools. Response bytes are forwarded unchanged to the site.</li>
+    </ul>
+    <h2>If an export fails</h2>
+    <p>Open a saved conversation, confirm you are signed in, and reload the page after installing or updating the extension. If the provider has changed its API, use DOM diagnostics to inspect what is visible. Keep private exports and HAR files out of public issue reports.</p>
+    <p>Chat Toolkit is an independent utility. It is not affiliated with or endorsed by the listed chat providers.</p>
+  </main>
+</body>
+</html>
