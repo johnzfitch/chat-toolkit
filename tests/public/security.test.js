@@ -156,6 +156,7 @@ function hooks() {
     const context = createContext({ window: { __chatToolkit: toolkit, wrappedJSObject: page, addEventListener() {} },
         browser: { extension: { inIncognitoContext: false } }, exportFunction: (fn) => fn,
         location: new URL('https://chatgpt.com/c/synthetic'), URL, Response, TextDecoder,
+        Date: class extends Date { static now() { return 1000; } },
         ArrayBuffer, Blob, FormData, console });
     runInContext(source('page-bridge.js'), context);
     toolkit.enablePageHooks();
