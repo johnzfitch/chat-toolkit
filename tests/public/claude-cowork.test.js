@@ -1,34 +1,16 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createContext, runInContext } from 'node:vm';
 
 const workspace = resolve(import.meta.dir, '../..');
 const fetcherSource = readFileSync(resolve(workspace, 'extension-src/lib/api-fetchers.js'), 'utf8');
-const parserURL = new URL('../../extension-src/lib/parser-worker.js', import.meta.url);
-const workers = new Set();
-
-const parserCall = (cmd, args) => new Promise((resolveCall, rejectCall) => {
-    const worker = new Worker(parserURL);
-    workers.add(worker);
-    const id = `${Date.now()}-${Math.random()}`;
-    worker.addEventListener('message', (event) => {
-        if (event.data?.id !== id) return;
-        workers.delete(worker);
-        worker.terminate();
-        if (event.data.error) rejectCall(new Error(event.data.error));
-        else resolveCall(event.data.result);
-    });
-    worker.addEventListener('error', (event) => {
-        workers.delete(worker);
-        worker.terminate();
-        rejectCall(event.error || new Error(event.message));
-    });
-    worker.postMessage({ id, cmd, args });
-});
-
-afterAll(() => {
-    for (const worker of workers) worker.terminate();
-});
+// The extension runs parser-worker.js as a content script; load it the same
+// way. structuredClone keeps each call's input isolated from the fixture.
+const parserContext = createContext({ window: { __chatToolkit: {} } });
+runInContext(readFileSync(resolve(workspace, 'extension-src/lib/parser-worker.js'), 'utf8'), parserContext);
+const parserCall = async (cmd, args) =>
+    structuredClone(parserContext.window.__chatToolkit.runParserCommand(cmd, structuredClone(args)));
 
 const loadFetchers = ({ url, cookie = '', fetchImpl }) => {
     const previous = {

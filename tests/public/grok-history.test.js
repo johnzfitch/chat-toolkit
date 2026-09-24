@@ -78,7 +78,8 @@ describe('Grok branch selection and message loading', () => {
         const clean = toolkit.runParserCommand('clean', { platform: 'grok', raw });
         const llm = toolkit.runParserCommand('llm', { platform: 'grok', raw, clean });
         expect(llm.messages).toHaveLength(65);
-        expect(llm.omitted.truncated).toBe(0);
+        // Zero counts are omitted, so no `omitted` object means nothing was dropped.
+        expect(llm.omitted).toBeUndefined();
     });
 
     test('a missing selected response is reported instead of switching to another branch', async () => {
@@ -189,17 +190,25 @@ describe('Grok parser compatibility and data retention', () => {
         expect(message.thinking).toBe('Supplied thinking text');
         expect(message.partial).toBeTrue();
         expect(message.streamErrors).toEqual(['interrupted']);
-        expect(message.steps).toEqual(raw.responses[0].steps);
+        // Raw steps are exported through thinking and blocks, not repeated.
+        expect(message.steps).toBeUndefined();
+        expect(message.toolResponses).toBeUndefined();
         expect(message.metadata.request_metadata.model).toBe('auto');
         expect(message.model).toBe('captured-model');
         expect(message.attachments).toHaveLength(3);
         expect(parse('llm').context.attachments).toHaveLength(3);
-        expect(message.blocks.map((b) => b.kind)).toEqual(['thinking', 'tool_result', 'tool_call', 'tool_result', 'text', 'attachment']);
+        // Text and reasoning are exported once, as content and thinking; blocks
+        // carry only what those fields do not.
+        expect(message.blocks.map((b) => b.kind)).toEqual(['tool_result', 'tool_call', 'tool_result']);
+        expect(message.thinking).toBeTruthy();
+        expect(message.content).toBeTruthy();
         expect(parse('markdown')).toContain('original tool output');
         expect(parse('markdown')).toContain('https://assets.example/image.png');
         expect(parse('html')).not.toContain('<script>alert(1)</script>');
         expect(parse('html')).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-        expect(parse('llm').context.references[0].url).toBe('https://example.com/citation');
+        // The citation is exported once, on its message.
+        expect(message.sources.map((source) => source.url)).toContain('https://example.com/citation');
+        expect(JSON.stringify(parse('llm').context?.references || [])).not.toContain('https://example.com/citation');
     });
 
     test('a thinking-only response retains its steps without inventing final answer text', () => {

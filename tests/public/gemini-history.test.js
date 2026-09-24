@@ -1,35 +1,10 @@
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const workspace = resolve(import.meta.dir, '../..');
 const commonSource = readFileSync(resolve(workspace, 'extension-src/lib/common.js'), 'utf8');
 const fetcherSource = readFileSync(resolve(workspace, 'extension-src/lib/api-fetchers.js'), 'utf8');
-const parserURL = new URL('../../extension-src/lib/parser-worker.js', import.meta.url);
-const workers = new Set();
-
-const parserCall = (cmd, args) => new Promise((resolveCall, rejectCall) => {
-    const worker = new Worker(parserURL);
-    workers.add(worker);
-    const id = `${Date.now()}-${Math.random()}`;
-    worker.addEventListener('message', (event) => {
-        if (event.data?.id !== id) return;
-        workers.delete(worker);
-        worker.terminate();
-        if (event.data.error) rejectCall(new Error(event.data.error));
-        else resolveCall(event.data.result);
-    });
-    worker.addEventListener('error', (event) => {
-        workers.delete(worker);
-        worker.terminate();
-        rejectCall(event.error || new Error(event.message));
-    });
-    worker.postMessage({ id, cmd, args });
-});
-
-afterAll(() => {
-    for (const worker of workers) worker.terminate();
-});
 
 const loadGeminiCode = () => {
     const previous = {
@@ -94,7 +69,7 @@ describe('Gemini full-history extraction', () => {
                 selected: 'rc_oldest',
                 timestamp: 100
             });
-            messages = toolkit.extractGeminiTurns({ data: [[newer, older]] });
+            messages = toolkit.extractGeminiConversation({ data: [[newer, older]] }).messages;
         } finally {
             restore();
         }

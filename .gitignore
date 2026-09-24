@@ -19,3 +19,6 @@ __pycache__/
 .env.*
 *.pem
 *.key
+
+# Local test-run exports (private conversations)
+*-test-runs/

@@ -1,54 +1,49 @@
 # Proposed Mozilla Add-ons listing
 
-Publisher: Zack Fitch. Support: zack@definitelynot.ai. License: MIT, copyright 2026 Zack Fitch. Repository: https://github.com/johnzfitch/chat-toolkit. The owner confirmed ownership of the project and its icons. These are submission fields; the public description begins below.
+Publisher: Zack Fitch. Support: zack@definitelynot.ai. License: MIT, copyright 2026 Zack Fitch. Repository: https://github.com/johnzfitch/chat-toolkit. These are submission fields; the public description begins below.
 
 **Name:** Chat Toolkit
 
-**Summary:** Export AI conversations to JSON, Markdown, or HTML. Keep supplied reasoning, citations, and tool results, with optional local diagnostics.
+**Summary** (under 250 characters): Copy or save AI conversations as Markdown, JSON, or HTML, with the reasoning, citations, and tool results the provider supplies. Choose all messages or only yours or the assistant's.
 
-**Suggested categories:** Other; Web Development. Confirm the categories offered by the submission form.
+**Suggested categories:** Other; Web Development. Confirm against the categories the form offers.
 
-**Platform:** Firefox desktop 140 and later. Android has not been tested or declared compatible.
+**Platform:** Firefox desktop 140 and later. Android has not been tested or declared.
 
-**Icon:** `extension-src/icons/icon128.png` (the same chat/export symbol is included at toolbar sizes).
+**Icons:** `store/icons/chat-toolkit-32.png` and `store/icons/chat-toolkit-64.png` (AMO asks for 32×32 and 64×64); 128/256/512 are also in `store/icons/`.
 
 ## Public description
 
-Save the conversation you have open in a format you can keep, search, or share.
+Save the conversation you have open in a format you can keep, search, share, or give to another model.
 
-Chat Toolkit adds a compact panel to Claude, ChatGPT, Grok at grok.com, Gemini, Google AI Studio, and OpenRouter. You can also use its Firefox toolbar button.
+Chat Toolkit adds a small palette to Claude, ChatGPT, Grok at grok.com, Gemini, Google AI Studio, and OpenRouter. The toolbar button offers the same controls.
 
-- Export to JSON, Markdown, or HTML.
-- Copy a formatted conversation or drag a Markdown file into another app.
-- Export only your messages or only the assistant's replies.
-- Retain reasoning text, citations, tool results, and attachment metadata when the provider makes them available.
-- Inspect conversation API data, visible-page data, and differences between them using optional diagnostic tools.
+- **Copy** or **Save file** as Markdown, JSON, or HTML.
+- Export **all messages**, only **yours**, or only the **assistant's**.
+- Keeps supplied reasoning, citations, search queries, tool calls and results, created files, and attachment metadata.
+- Complete exports without repetition: identical tool output and already-linked sources are not repeated, so files stay compact as context for another model.
+- Optional **Advanced tools** for inspecting a conversation's provider data, the page, and differences between them.
 
-Sign in to your chat provider and open a saved conversation before exporting. Service APIs change, and available history varies by platform and conversation type. Some exports fall back to the loaded page. Chat Toolkit does not recover hidden reasoning or unavailable messages.
+Sign in to your chat provider and open a saved conversation first. Available history varies by provider; when an export comes from the loaded page instead of the provider, Chat Toolkit says so. It cannot recover messages or reasoning the service does not provide.
 
 **How your data is handled**
 
-Chat Toolkit processes exports in your browser and saves them to your downloads folder or clipboard. It has no developer-operated collection server, analytics, or automatic report uploads. When you request an API-backed export or diagnostic, it sends authenticated requests to the current chat provider using session cookies or access tokens and identifiers needed to retrieve your data.
+Chat Toolkit processes conversations in your browser and saves them to your downloads folder or clipboard. It has no developer server, analytics, or automatic uploads. When you export, it requests the conversation from the same chat site you are on, using your existing sign-in. It stores only the palette's layout and your export choices.
 
 **Optional diagnostics**
 
-The Diagnostics controls can produce reports containing private conversation and account data. Network and Capture record traffic during an explicit inspection or export. ChatGPT research recording stays off until you click Record, is scoped to that tab, and is cleared on navigation or tab closure. Fetching missing research state is a separate action. Export account capture additionally retrieves available settings, memory, project resources, and session metadata on supported providers. Optional page hooks instrument requests during captures and are removed by reloading the page. These tools do not automatically upload their reports.
+Advanced tools can produce reports containing private conversation and account data; they stay in your browser unless you save or share them. Network inspection and capture record only while running, and a small light shows while they are active. ChatGPT research recording starts off and is scoped to its tab. Account capture additionally retrieves settings, memory, and project resources on Claude and ChatGPT. Page hooks are a separate opt-in removed by reloading.
 
-The extension itself does not charge for these features. Chat-provider accounts, subscriptions, or feature access may be required by the provider.
+The extension itself is free. Chat providers may require accounts or subscriptions. Chat Toolkit is an independent utility, unaffiliated with the listed providers.
 
-Chat Toolkit is an independent utility, unaffiliated with the listed chat providers.
+## Release notes for 1.7.0
 
-## Release notes for 1.6.7
+- Smaller, clearer palette: Copy and Save first, then message and file-type choices, with Advanced tools tucked below. Colours follow the chat site.
+- Complete exports with repetition removed; compact JSON layout.
+- Claude JSON now includes tool activity and created files. Gemini exports fixed and product links resolved.
+- Emoji and code-block blank lines preserved; favicon links no longer listed as sources.
+- Fewer permissions; network listeners only run during diagnostics.
 
-- Grok's current `/c/` conversation routes, response-node history, response loading, and selected branches are supported.
-- Export formats retain the full available selected Grok history, supplied reasoning/search steps, sources, and tool results.
-- Added Firefox data-use declarations, Help & privacy, explicit diagnostic controls, and a separate account-capture action.
-- Diagnostic recording is isolated per tab and no longer writes or restores disk caches.
-- Replaced dynamic HTML text insertion with text nodes and added a recognizable chat/export icon.
-- Enforced same-origin authenticated requests, excluded authentication bodies from diagnostics by URL path, and kept reports and copy buffers outside ordinary page DOM queries.
-- Fixed optional fetch capture timing and stream listener handling; added public provider and security regression tests.
-- Released project source and icons under the MIT license with contributor documentation and CI.
+## Screenshots
 
-## Screenshots to capture from the running extension
-
-No product screenshot has been fabricated. Use a harmless conversation in your own test account to capture the real chat panel, the actual toolbar popup, and one exported Markdown or HTML example. Exclude profile details, sidebar history, cookies, tokens, and personal conversation content. A screenshot is useful listing material; it is not a replacement for testing the extension.
+Not yet captured. Use 1280×800 images of harmless or synthetic conversations. Either capture from a test account, or run `python scripts/capture-listing-screenshots.py --firefox <path>` to render the real palette and popup over the synthetic page in `assets/design/listing-harness/` (it imitates no provider). Exclude profile details, sidebars, and personal content.

@@ -24,11 +24,16 @@ function background() {
         setItem: { value(key, value) { storageCalls.push(['set', key]); storage[key] = value; } },
         removeItem: { value(key) { storageCalls.push(['remove', key]); delete storage[key]; } }
     });
-    const event = (name) => ({ addListener(fn) { listeners[name] = fn; } });
+    const event = (name) => ({
+        addListener(fn) { listeners[name] = fn; },
+        removeListener(fn) { if (listeners[name] === fn) delete listeners[name]; }
+    });
+    const timers = [];
     let opened = 0;
     const context = createContext({
         URL, URLSearchParams, Blob, TextDecoder, TextEncoder, ArrayBuffer, Uint8Array,
-        console, localStorage: storage, setTimeout() {},
+        console, localStorage: storage,
+        setTimeout(fn) { timers.push(fn); return timers.length; }, clearTimeout(id) { timers[id - 1] = null; },
         browser: {
             tabs: { onRemoved: event('removed'), onUpdated: event('updated') },
             runtime: { onMessage: event('message'), async openOptionsPage() { opened++; } },
@@ -57,7 +62,7 @@ function background() {
             documentUrl: page, url: 'https://chatgpt.com/backend-api/ecosystem/call_mcp',
             method: 'POST', timeStamp: Date.now(), type: 'xmlhttprequest',
             requestBody: { raw: [{ bytes: new TextEncoder().encode(JSON.stringify(probe)).buffer }] }, ...overrides };
-        listeners.before(details);
+        listeners.before?.(details);
         return details;
     };
     const finish = (details) => {
@@ -67,10 +72,11 @@ function background() {
             filter.ondata({ data });
             filter.onstop();
         }
-        listeners.completed({ ...details, statusCode: 200 });
+        listeners.completed?.({ ...details, statusCode: 200 });
         return filter;
     };
-    return { send, request, finish, filters, listeners, storageCalls, storage, legacyKey,
+    const runTimers = () => { for (const fn of timers.splice(0)) fn?.(); };
+    return { send, request, finish, filters, listeners, storageCalls, storage, legacyKey, runTimers,
         status: (from = sender()) => send({ action: 'passive-store-status', full: true, create: true }, from),
         opened: () => opened };
 }
@@ -78,6 +84,9 @@ function background() {
 describe('Public release diagnostic behavior', () => {
     test('loading the extension does not record requests, restore old caches, or write chat data to disk', () => {
         const app = background();
+        // No webRequest listener exists until a capture or recording starts.
+        expect(app.listeners.before).toBeUndefined();
+        expect(app.listeners.completed).toBeUndefined();
         app.finish(app.request());
         const status = app.status();
         expect(status.enabled).toBe(false);
@@ -102,6 +111,34 @@ describe('Public release diagnostic behavior', () => {
         app.send({ action: 'diagnostics-start' }, sender(2));
         expect(app.status(sender(2)).summary.capture_count).toBe(0);
         expect(app.storageCalls).toEqual([]);
+    });
+
+    test('webRequest listeners attach only while recording or capturing and detach when idle', () => {
+        const app = background();
+        app.send({ action: 'diagnostics-start' });
+        expect(typeof app.listeners.before).toBe('function');
+        app.send({ action: 'diagnostics-stop' });
+        // In-flight requests may still complete during the grace period.
+        expect(typeof app.listeners.completed).toBe('function');
+        app.runTimers();
+        expect(app.listeners.before).toBeUndefined();
+        app.send({ action: 'network-capture-start', platform: 'chatgpt', url: page, reason: 'network-inspector' });
+        expect(typeof app.listeners.before).toBe('function');
+        app.send({ action: 'diagnostics-start' });
+        app.send({ action: 'network-capture-stop' });
+        app.runTimers();
+        // Recording is still on, so the listeners stay.
+        expect(typeof app.listeners.before).toBe('function');
+        app.send({ action: 'diagnostics-clear' });
+        expect(app.listeners.before).toBeUndefined();
+    });
+
+    test('recording status can be read without changing it', () => {
+        const app = background();
+        expect(app.send({ action: 'diagnostics-status' })).toEqual({ success: true, enabled: false });
+        expect(app.listeners.before).toBeUndefined();
+        app.send({ action: 'diagnostics-start' });
+        expect(app.send({ action: 'diagnostics-status' }).enabled).toBe(true);
     });
 
     test('Stop retains earlier research data but ignores later responses and new requests', () => {
@@ -305,7 +342,8 @@ describe('Public release page surfaces', () => {
         await toolkit.setPageCapture('start');
         expect(pageWindow.fetch).toBe(nativeFetch);
         expect(toolkit.__hookState().page_hooks_enabled).toBe(false);
-        toolkit.enablePageHooks();
+        if (privateWindow) expect(() => toolkit.enablePageHooks()).toThrow('private windows');
+        else toolkit.enablePageHooks();
         await toolkit.setPageCapture('start');
         expect(toolkit.__hookState().fetch).toBe(!privateWindow);
         if (privateWindow) expect(pageWindow.fetch).toBe(nativeFetch);

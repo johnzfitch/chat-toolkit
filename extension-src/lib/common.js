@@ -18,15 +18,6 @@
 
     if (!PLATFORM) return;
 
-    const COLORS = {
-        claude: '#d4a574',
-        chatgpt: '#74aa9c',
-        grok: '#6b7280',
-        openrouter: '#6566f1',
-        gemini: '#8ab4f8',
-        aistudio: '#a78bfa'
-    };
-
     const safeStringify = (value) => {
         const seen = new WeakSet();
         const json = JSON.stringify(value, (key, current) => {
@@ -39,20 +30,14 @@
         return json ?? String(value ?? '');
     };
 
-    const escapeHTML = (text) => (text || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-
     // Google's batchexecute responses (Gemini lives entirely on
     // /_/BardChatUi/data/batchexecute) are not plain JSON. They are an
     // anti-JSON-hijack prefix `)]}'`, then a sequence of length-prefixed
     // chunks: a line with a byte count, then a line with a JSON array. Each
     // array holds `["wrb.fr", <rpcid>, "<stringified-inner-json>", ...]` rows.
     // This decodes every chunk and returns the parsed inner payloads keyed by
-    // rpcid. (A copy lives in injected.js, which runs in the page world and
-    // can't see this namespace.)
+    // rpcid. (background.js keeps its own copy; the background page cannot
+    // see this content-script namespace.)
     const decodeBatchExecute = (text) => {
         if (typeof text !== 'string') return [];
         const body = text.replace(/^\)\]\}'?\s*/, '');
@@ -80,43 +65,12 @@
     const batchPayload = (payloads, rpcid) =>
         (payloads || []).find((p) => p.rpcid === rpcid)?.data ?? null;
 
-    const compactObject = (obj) => Object.fromEntries(Object.entries(obj).filter(([, value]) => {
-        if (value == null) return false;
-        if (Array.isArray(value)) return value.length > 0;
-        if (typeof value === 'object') return Object.keys(value).length > 0;
-        if (typeof value === 'string') return value.trim().length > 0;
-        return true;
-    }));
-
-    const unwrap = (value) => {
-        try { return typeof XPCNativeWrapper !== 'undefined' && value ? XPCNativeWrapper.unwrap(value) : value; }
-        catch { return value; }
-    };
-
-    // Re-serialize across the content-script / page boundary so we never leak
-    // wrapped references into the page (or vice versa).
-    const cloneForPage = (value) => {
-        const plain = (() => {
-            try { return JSON.parse(safeStringify(value)); }
-            catch { return { value: String(value ?? '') }; }
-        })();
-
-        try { return typeof cloneInto === 'function' ? cloneInto(plain, window) : plain; }
-        catch { return plain; }
-    };
-
     window.__chatToolkit = {
         PLATFORM,
-        COLORS,
         isGoogle: PLATFORM === 'gemini' || PLATFORM === 'aistudio',
-        pageColor: COLORS[PLATFORM],
         safeStringify,
-        escapeHTML,
         decodeBatchExecute,
         batchPayload,
-        compactObject,
-        unwrap,
-        cloneForPage,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     };
 })();

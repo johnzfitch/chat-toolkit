@@ -932,9 +932,13 @@
         return [];
     };
 
+    // node[2] and node[2][0] must be arrays: indexing into a string also
+    // yields a string, and reasoning steps such as [id, …, "Google Search"]
+    // otherwise pass as turns whose prompt is "G" (September 2026 regression).
     const isGeminiConversationTurn = (node) => Array.isArray(node) &&
-        typeof node?.[2]?.[0]?.[0] === 'string' &&
-        (Array.isArray(node?.[0]) || Array.isArray(node?.[3]));
+        Array.isArray(node[2]) && Array.isArray(node[2][0]) &&
+        typeof node[2][0][0] === 'string' &&
+        (Array.isArray(node[0]) || Array.isArray(node[3]));
 
     const findGeminiConversationTurns = (data) => {
         let best = [];
@@ -1019,6 +1023,53 @@
             queries.push(query);
         }
         return queries;
+    };
+
+    // Gemini answers can link to placeholders such as
+    // http://googleusercontent.com/shopping_content/123 that only its own UI
+    // resolves. The candidate carries matching cards: [[placeholder, …], …,
+    // [[… title at 10, link at 12, price at 13, … merchant at 27 or 20]]].
+    // Replace each placeholder with the card's link and keep it as a source.
+    const GEMINI_PLACEHOLDER = /^https?:\/\/googleusercontent\.com\/[a-z_]+_content\/[\w-]+$/i;
+
+    const geminiPlaceholderCards = (candidate) => {
+        const cards = new Map();
+        const visit = (node, depth) => {
+            if (!Array.isArray(node) || depth > 8 || cards.size >= 500) return;
+            const placeholder = node[0]?.[0];
+            const product = node[3]?.[0];
+            if (typeof placeholder === 'string' && GEMINI_PLACEHOLDER.test(placeholder) && Array.isArray(product)) {
+                const url = canonicalGeminiSourceURL(product[12]);
+                if (url && !cards.has(placeholder)) {
+                    cards.set(placeholder, {
+                        title: cleanGeminiText(product[10]),
+                        url,
+                        attribution: cleanGeminiText(product[27]) || cleanGeminiText(product[20]),
+                        price: cleanGeminiText(product[13])
+                    });
+                }
+                return;
+            }
+            for (const child of node) visit(child, depth + 1);
+        };
+        visit(candidate?.[12], 0);
+        return cards;
+    };
+
+    const resolveGeminiPlaceholders = (content, candidate, registerSource) => {
+        const cards = geminiPlaceholderCards(candidate);
+        const numbers = [];
+        if (!cards.size) return { content, numbers };
+        const resolved = content.replace(/https?:\/\/googleusercontent\.com\/[a-z_]+_content\/[\w-]+/gi, (placeholder) => {
+            const card = cards.get(placeholder);
+            if (!card) return placeholder;
+            const number = registerSource({ title: card.title, url: card.url,
+                ...(card.attribution ? { attribution: card.attribution } : {}),
+                ...(card.price ? { price: card.price } : {}) });
+            if (number && !numbers.includes(number)) numbers.push(number);
+            return card.url;
+        });
+        return { content: resolved, numbers };
     };
 
     const annotateGeminiGrounding = (answer, candidate, registerSource) => {
@@ -1108,6 +1159,11 @@
                 const candidate = selectedGeminiCandidate(turn);
                 const answer = geminiCandidateText(candidate);
                 const grounded = annotateGeminiGrounding(answer, candidate, registerSource);
+                const linked = resolveGeminiPlaceholders(grounded.content, candidate, registerSource);
+                grounded.content = linked.content;
+                for (const number of linked.numbers) {
+                    if (!grounded.messageSources.includes(number)) grounded.messageSources.push(number);
+                }
                 const thinking = geminiCandidateThinking(candidate);
                 const turnQueries = geminiSearchQueries(turn);
                 for (const query of turnQueries) {
@@ -1144,8 +1200,6 @@
         }
         return { messages, sources, search_queries: searchQueries };
     };
-
-    const extractGeminiTurns = (raw) => extractGeminiConversation(raw).messages;
 
     const summarizeResources = (resources) => {
         const entries = Object.values(resources || {});
@@ -1254,19 +1308,14 @@
     CT.getCurrentId = getCurrentId;
     CT.getClaudeOrgId = getClaudeOrgId;
     CT.fetchClaude = fetchClaude;
-    CT.fetchClaudeCowork = fetchClaudeCowork;
-    CT.fetchClaudeCoworkEvents = fetchClaudeCoworkEvents;
     CT.fetchClaudeRawAndMessages = fetchClaudeRawAndMessages;
     CT.fetchChatGPT = fetchChatGPT;
     CT.chatGPTFetch = chatGPTFetch;
-    CT.getChatGPTAccessToken = getChatGPTAccessToken;
     CT.fetchGrok = fetchGrok;
     CT.fetchOpenRouter = fetchOpenRouter;
     CT.fetchGemini = fetchGemini;
     CT.extractGeminiConversation = extractGeminiConversation;
-    CT.extractGeminiTurns = extractGeminiTurns;
     CT.fetchChatGPTSessionBundle = fetchChatGPTSessionBundle;
     CT.fetchClaudeSessionBundle = fetchClaudeSessionBundle;
     CT.noteGeminiTokens = noteGeminiTokens;
-    CT.readWizData = readWizData;
 })();

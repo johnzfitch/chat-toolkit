@@ -69,8 +69,9 @@ function ui() {
     };
     const toolkit = { PLATFORM: 'grok', COLORS: { grok: '#888' }, safeStringify: JSON.stringify };
     window.__chatToolkit = toolkit;
-    runInContext(source('ui-panel.js'), createContext({ window, document: window.document,
-        navigator: {}, Blob, setTimeout() {} }));
+    const context = createContext({ window, document: window.document, navigator: {}, Blob, setTimeout() {} });
+    runInContext(source('ui-model.js'), context);
+    runInContext(source('ui-panel.js'), context);
     return { window, toolkit, roots };
 }
 

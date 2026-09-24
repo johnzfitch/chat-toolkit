@@ -2,8 +2,12 @@
 //
 // Network capture intentionally uses Firefox's webRequest APIs instead of
 // patching page-world fetch/XHR/WebSocket objects. That keeps Claude,
-// ChatGPT, and Gemini startup code untouched while still allowing the Net/Cap
-// tools to inspect API traffic.
+// ChatGPT, and Gemini startup code untouched while still allowing the
+// Network inspector and diagnostic capture tools to inspect API traffic.
+//
+// The webRequest listeners are attached only while a capture or research
+// recording is active, so ordinary browsing and ordinary exports never route
+// provider requests through this page.
 
 const activeObjectUrls = new Set();
 const activeCaptures = new Map();
@@ -28,7 +32,6 @@ const PASSIVE_STORAGE_PREFIX = 'chatToolkitPassive:';
 const REQUEST_FILTER = {
     urls: [
         'https://claude.ai/*',
-        'https://api.anthropic.com/*',
         'https://chatgpt.com/*',
         'https://chat.openai.com/*',
         'https://gemini.google.com/*',
@@ -64,7 +67,7 @@ const PLATFORM_HINTS = {
 const platformFromUrl = (urlString) => {
     try {
         const { hostname, pathname } = new URL(urlString);
-        if (hostname === 'claude.ai' || hostname === 'api.anthropic.com') return 'claude';
+        if (hostname === 'claude.ai') return 'claude';
         if (hostname === 'chatgpt.com' || hostname === 'chat.openai.com') return 'chatgpt';
         if (hostname === 'gemini.google.com') return 'gemini';
         if (hostname === 'aistudio.google.com') return 'aistudio';
@@ -1022,6 +1025,7 @@ const startCapture = (message, sender) => {
     }
     const state = makeCaptureState(tabId, platform, pageUrl, message.reason);
     activeCaptures.set(tabId, state);
+    attachRequestListeners();
     return snapshotCapture(state, tabId, message.url);
 };
 
@@ -1033,6 +1037,7 @@ const stopCapture = (sender) => {
         state.active = false;
         state.stopped_at = Date.now();
         setTimeout(() => cleanupCapture(tabId), CAPTURE_TTL_MS);
+        scheduleDetach();
     }
     return snapshotCapture(state, tabId, sender?.tab?.url);
 };
@@ -1102,8 +1107,17 @@ const changeDiagnostics = (message, sender) => {
     if (tabId == null || sender.tab.incognito || !platformFromUrl(sender.url || sender.tab.url)) {
         return { success: false, error: 'Open a supported chat in a non-private tab to record diagnostics' };
     }
-    if (message.action === 'diagnostics-start') recordingTabs.add(tabId);
-    if (message.action === 'diagnostics-stop') recordingTabs.delete(tabId);
+    if (message.action === 'diagnostics-start') {
+        recordingTabs.add(tabId);
+        attachRequestListeners();
+    }
+    if (message.action === 'diagnostics-stop') {
+        recordingTabs.delete(tabId);
+        scheduleDetach();
+    }
+    if (message.action === 'diagnostics-status') {
+        return { success: true, enabled: recordingTabs.has(tabId) };
+    }
     if (message.action === 'diagnostics-clear') {
         clearTabDiagnostics(tabId);
         // Only the user's explicit Clear action removes legacy disk caches.
@@ -1113,22 +1127,58 @@ const changeDiagnostics = (message, sender) => {
                 if (key.startsWith(PASSIVE_STORAGE_PREFIX)) localStorage.removeItem(key);
             }
         }
+        detachRequestListenersIfIdle();
     }
     return { success: true, enabled: recordingTabs.has(tabId) };
 };
 
-browser.tabs.onRemoved.addListener((tabId) => clearTabDiagnostics(tabId));
-browser.tabs.onUpdated.addListener((tabId, change) => {
-    if (change.url || change.status === 'loading') clearTabDiagnostics(tabId);
-});
+let listenersAttached = false;
+let detachTimer = null;
 
-browser.webRequest.onBeforeRequest.addListener(
-    onBeforeRequest,
-    REQUEST_FILTER,
-    ['blocking', 'requestBody']
-);
-browser.webRequest.onCompleted.addListener(onCompleted, REQUEST_FILTER);
-browser.webRequest.onErrorOccurred.addListener(onErrorOccurred, REQUEST_FILTER);
+const diagnosticsActive = () => recordingTabs.size > 0 ||
+    [...activeCaptures.values()].some((state) => state.active);
+
+const attachRequestListeners = () => {
+    if (detachTimer) { clearTimeout(detachTimer); detachTimer = null; }
+    if (listenersAttached) return;
+    browser.webRequest.onBeforeRequest.addListener(
+        onBeforeRequest,
+        REQUEST_FILTER,
+        ['blocking', 'requestBody']
+    );
+    browser.webRequest.onCompleted.addListener(onCompleted, REQUEST_FILTER);
+    browser.webRequest.onErrorOccurred.addListener(onErrorOccurred, REQUEST_FILTER);
+    listenersAttached = true;
+};
+
+const detachRequestListenersIfIdle = () => {
+    if (!listenersAttached || diagnosticsActive()) return;
+    browser.webRequest.onBeforeRequest.removeListener(onBeforeRequest);
+    browser.webRequest.onCompleted.removeListener(onCompleted);
+    browser.webRequest.onErrorOccurred.removeListener(onErrorOccurred);
+    requestStates.clear();
+    listenersAttached = false;
+};
+
+// Requests already in flight when recording stops still report completion
+// for a short grace period before the listeners are removed.
+const scheduleDetach = () => {
+    if (detachTimer) clearTimeout(detachTimer);
+    detachTimer = setTimeout(() => {
+        detachTimer = null;
+        detachRequestListenersIfIdle();
+    }, CAPTURE_TTL_MS);
+};
+
+browser.tabs.onRemoved.addListener((tabId) => {
+    clearTabDiagnostics(tabId);
+    detachRequestListenersIfIdle();
+});
+browser.tabs.onUpdated.addListener((tabId, change) => {
+    if (!change.url && change.status !== 'loading') return;
+    clearTabDiagnostics(tabId);
+    detachRequestListenersIfIdle();
+});
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.action === 'open-help') {
@@ -1138,7 +1188,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
         return true;
     }
-    if (/^diagnostics-(?:start|stop|clear)$/.test(message?.action || '')) {
+    if (/^diagnostics-(?:start|stop|clear|status)$/.test(message?.action || '')) {
         sendResponse(changeDiagnostics(message, sender));
         return;
     }

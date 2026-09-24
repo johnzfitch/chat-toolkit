@@ -21,9 +21,10 @@ for name, path in files.items():
     if path.is_symlink() or (name != 'LICENSE' and path.suffix not in {'.js', '.json', '.html', '.png'}):
         raise ValueError(f'Unexpected runtime file: {name}')
 referenced = manifest['background']['scripts'] + [s for group in manifest['content_scripts'] for s in group['js']]
-referenced += list(manifest['icons'].values()) + manifest['web_accessible_resources']
+referenced += list(manifest['icons'].values()) + manifest.get('web_accessible_resources', [])
 referenced += [manifest['browser_action']['default_popup']]
 referenced += list(manifest['browser_action']['default_icon'].values())
+referenced += [path for icon in manifest['browser_action'].get('theme_icons', []) for path in (icon['light'], icon['dark'])]
 if manifest.get('options_ui'):
     referenced.append(manifest['options_ui']['page'])
 for name in referenced:

@@ -7,30 +7,48 @@
     const CT = window.__chatToolkit;
     if (!CT) return;
 
-    // Lightweight whitespace/emoji cleanup so DOM snapshots aren't ragged
-    // before the worker even sees them. Mirrors the worker's Clean.* but
-    // we keep a copy on the main thread to avoid round-tripping every cell
-    // through the worker just to trim it.
-    const stripEmoji = (t) => t.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}]/gu, '');
-    const isArt = (line) => /[─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬┃┏┓┗┛┣┫┳┻╋▀▄█▌▐░▒▓]/.test(line);
+    // Lightweight whitespace cleanup so DOM snapshots aren't ragged before the
+    // worker sees them. Mirrors the worker's Clean.* on the main thread to
+    // avoid round-tripping every cell through the worker just to trim it.
+    // Emoji and symbols are conversation content and are kept; lines inside
+    // fenced code blocks are kept exactly.
+    const FENCE = /^ {0,3}(`{3,}|~{3,})/;
     const stripUnsupported = (t) => t.replace(/```\s*\n\s*This block is not supported[^\n]*\n\s*```\s*\n?/g, '');
     const collapseWhitespace = (t) => {
         const lines = t.split('\n');
         const result = [];
         let blanks = 0;
+        let fence = null;
         for (const line of lines) {
+            const marker = line.match(FENCE)?.[1] || '';
+            if (fence) {
+                result.push(line);
+                if (marker && marker[0] === fence[0] && marker.length >= fence.length &&
+                    !line.trim().slice(marker.length).trim()) fence = null;
+                continue;
+            }
+            if (marker && !(marker[0] === '`' && line.trim().slice(marker.length).includes('`'))) {
+                fence = marker;
+                blanks = 0;
+                result.push(line.trimEnd());
+                continue;
+            }
             const trimmed = line.trimEnd();
             if (!trimmed) {
                 if (++blanks <= 1) result.push('');
             } else {
                 blanks = 0;
-                result.push(isArt(line) || line.startsWith('    ') ? line.trimEnd() : trimmed);
+                result.push(trimmed);
             }
         }
         return result.join('\n');
     };
-    const cleanText = (t) => collapseWhitespace(stripEmoji(stripUnsupported(t || ''))).trim();
+    const cleanText = (t) => collapseWhitespace(stripUnsupported(t || '')).trim();
     const comparableText = (text) => cleanText(String(text || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+
+    // Gemini's tab title carries a " - Google Gemini" suffix that is not part
+    // of the conversation title.
+    const geminiTitle = () => document.title.replace(/\s*[-–|]\s*(?:Google\s+)?Gemini\s*$/i, '') || document.title;
 
     const readNodeText = (node) => {
         if (!node) return '';
@@ -262,7 +280,7 @@
                 if (isUser) push('user', el);
                 else push('assistant', el.querySelector('message-content') || el);
             });
-            if (messages.length) return { name: document.title, messages, _source: 'dom' };
+            if (messages.length) return { name: geminiTitle(), messages, _source: 'dom' };
 
             // Fallback for layouts without the custom elements: class heuristics.
             document.querySelectorAll('[class*="query-text"], [class*="user-query"], [class*="markdown"], [class*="model-response"]').forEach((el) => {
@@ -271,7 +289,7 @@
                 const isUser = /query|user/i.test(cls);
                 push(isUser ? 'user' : 'assistant', el);
             });
-            return { name: document.title, messages, _source: 'dom' };
+            return { name: geminiTitle(), messages, _source: 'dom' };
         },
 
         aistudio: () => {
@@ -335,6 +353,7 @@
         };
     };
 
+    CT.geminiTitle = geminiTitle;
     CT.cleanText = cleanText;
     CT.comparableText = comparableText;
     CT.readNodeText = readNodeText;
